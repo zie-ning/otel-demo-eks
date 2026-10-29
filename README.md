@@ -19,7 +19,8 @@
 .
 ├── PLAN.md                 # 프로젝트 계획과 의사결정 기록
 ├── docs/
-│   └── operations.md       # 인프라 운영 지침 (켜고 끄기, 규칙, 비용, 문제 해결)
+│   ├── operations.md       # 인프라 운영 지침 (켜고 끄기, 규칙, 비용, 문제 해결)
+│   └── observability-findings.md  # 텔레메트리 데이터 품질 문제 기록
 ├── scripts/
 │   ├── up.ps1              # 클러스터 + 애드온 생성
 │   └── down.ps1            # ALB 정리 후 전체 삭제

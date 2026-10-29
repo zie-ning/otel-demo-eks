@@ -129,6 +129,7 @@
 - [ ] ③ Tempo 도입 → 차트 내장 Jaeger 비활성화
 - [ ] ④ Loki 도입 → 차트 내장 OpenSearch 비활성화
 - [ ] ⑤ Grafana 데이터소스 연결: exemplar → 트레이스, 트레이스 → 로그
+- [ ] ⑥ 관측 데이터 품질 문제 수정 ([docs/observability-findings.md](docs/observability-findings.md)의 OBS-1~3)
 - **완료 기준**: Grafana 하나에서 메트릭 → 트레이스 → 로그로 이동 가능
 
 ### Phase 4. SLO와 알림
