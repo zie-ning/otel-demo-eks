@@ -12,6 +12,7 @@
 | 플랫폼 | **AWS EKS** | 클라우드 환경 실무에서 가장 일반적인 관리형 쿠버네티스. 컨트롤 플레인 운영 대신 관측성·장애 분석에 집중 |
 | 리전 | **ap-northeast-2 (서울)** | |
 | 노드 | **온디맨드**, 필요할 때만 생성 후 삭제 | Spot 회수로 인한 실험 방해 방지. 비용은 운영 시간으로 통제 |
+| 노드 구성 | **m7i-flex.large × 3** = app 노드그룹 2대 + monitoring 노드그룹 1대(taint) | 계정이 AWS 무료 플랜이라 프리티어 대상 타입만 가능. 관측 스택을 앱과 분리해 앱 장애가 관측 도구로 번지지 않게 함 |
 | 운영 방식 | Terraform `apply` / `destroy`로 켜고 끔 | 상시 운영 대비 비용 대폭 절감 |
 | 네트워크 | **NAT Gateway 없이 퍼블릭 서브넷**에 노드 배치 | NAT 비용 제거. 보안 그룹과 접근 CIDR 제한으로 보완 (트레이드오프는 문서화) |
 | 인프라 IaC | **Terraform** (클러스터 / 애드온 단계 분리 적용) | 같은 apply에서 클러스터 생성과 Helm 설치를 함께 할 때의 provider 초기화 문제 회피 |
@@ -84,12 +85,12 @@
 | 항목 | 시간당 |
 |---|---|
 | EKS 컨트롤 플레인 | $0.10 |
-| 워커 노드 t3.xlarge × 2 (초기 가정, 실측 후 조정) | 약 $0.42 |
+| 워커 노드 m7i-flex.large × 3 ($0.118/시간) | 약 $0.35 |
 | ALB | 약 $0.02 + LCU |
 | 퍼블릭 IPv4 (노드·ALB) | IP당 $0.005 |
-| **합계** | **약 $0.55~0.60** |
+| **합계** | **약 $0.50** |
 
-- 월 60시간 사용 시 약 $35, 100시간 시 약 $60.
+- 월 60시간 사용 시 약 $30, 80시간 시 약 $40.
 - 삭제 후에도 남는 비용: Terraform state용 S3 (거의 무료).
 
 **비용 사고 방지**
@@ -112,7 +113,9 @@
 - [ ] VPC: 퍼블릭 서브넷 2~3개 AZ, NAT 없음
 - [ ] EKS 클러스터 + 매니지드 노드그룹 (온디맨드)
 - [ ] API 엔드포인트 접근 CIDR 제한
-- [ ] 애드온 단계(별도 apply): AWS Load Balancer Controller, metrics-server, EBS CSI Driver
+- [ ] 애드온 단계(별도 apply): AWS Load Balancer Controller, metrics-server
+  - EBS CSI Driver는 제외: 영구 볼륨 없이 운영하고 클러스터 삭제 시 데이터도 함께 사라지는 방식이라 불필요. 필요해지면 추가
+- [ ] up/down 스크립트, 운영 지침([docs/operations.md](docs/operations.md))
 - **완료 기준**: `kubectl get nodes` 정상, `terraform destroy`로 깨끗하게 삭제되는 것까지 확인
 
 ### Phase 2. 데모 배포 (Helm, 기본 구성)
@@ -163,7 +166,7 @@
 | 장애 주입 도구 | flagd만 / Chaos Mesh 추가 | Phase 5 |
 | Terraform state | S3 (추천) / 로컬 | Phase 0 |
 | 저장소 공개 여부·구조 | 아래 초안 참고 | Phase 0 |
-| 노드 크기·대수 | t3.xlarge × 2에서 실측 후 조정 | Phase 3 |
+| 노드 크기·대수 | m7i-flex.large × 3에서 실측 후 조정 | Phase 3 |
 | GitOps(Argo CD) 전환 | 선택 과제 | Phase 6 이후 |
 
 ### 저장소 구조 초안

@@ -6,6 +6,11 @@ resource "aws_budgets_budget" "monthly" {
   limit_unit   = "USD"
   time_unit    = "MONTHLY"
 
+  # 무료 플랜 크레딧이 비용을 상쇄하면 알림이 오지 않으므로 크레딧 차감 전 금액으로 계산
+  cost_types {
+    include_credit = false
+  }
+
   # 실제 비용 50% 도달 (기본값 기준 $20)
   notification {
     comparison_operator        = "GREATER_THAN"
