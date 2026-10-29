@@ -46,6 +46,15 @@
 - 소요 시간: 처음 생성할 때 약 15~20분
 - 각 apply는 plan을 보여주고 `yes` 입력을 기다린다. 확인 없이 진행하려면 `-AutoApprove`를 붙인다.
 
+### 데모 배포
+```powershell
+.\scripts\deploy-demo.ps1            # 설치/업그레이드 (차트 버전 고정, 모든 파드 Ready까지 대기)
+.\scripts\deploy-demo.ps1 -Template  # 클러스터에 적용하지 않고 렌더링 결과만 확인
+```
+- values: `helm/values/otel-demo.yaml` (커밋), ALB 허용 IP는 실행 시 `helm/values/otel-demo.local.yaml`로 생성 (커밋 안 함)
+- 접속 주소: `kubectl get ingress -n otel-demo`의 ADDRESS. ALB는 생성 후 2~3분 뒤부터 응답한다
+- 경로: `/`(쇼핑몰), `/jaeger/ui/`, `/grafana/`, `/feature/`(장애 플래그), `/loadgen/`(Locust)
+
 ### 작업 종료
 ```powershell
 .\scripts\down.ps1
@@ -161,6 +170,17 @@ aws cloudtrail lookup-events --profile terraform-admin --lookup-attributes Attri
 1. **프라이빗 엔드포인트가 켜져 있는가** (`endpoint_private_access = true`). 퍼블릭 엔드포인트를 본인 IP로 제한했기 때문에, 노드는 프라이빗 엔드포인트로만 API 서버에 붙을 수 있다.
 2. 서브넷에 `map_public_ip_on_launch = true`가 적용되어 있는가. NAT가 없으므로 노드는 퍼블릭 IP로 이미지를 받는다.
 3. EKS 콘솔 → 노드그룹 → Health issues 메시지
+
+### 스크립트가 helm/kubectl 실행 중에 NativeCommandError로 끊긴다
+증상: `helm : I1029 ... client-side throttling` 같은 정보성 로그 한 줄에서 스크립트가 종료되고, Helm 릴리스가 `pending-install`로 남는다.
+
+원인: Windows PowerShell 5.1은 네이티브 명령의 stderr 출력을 오류로 바꾼다. `$ErrorActionPreference = 'Stop'`이면 그 즉시 스크립트가 중단된다.
+
+해결: `scripts/common.ps1`의 `Invoke-Native`가 실행 중에만 `Continue`로 낮추고 종료 코드로 성공 여부를 판단하도록 수정됨 (2026-10-29). 이미 `pending-install`로 남은 릴리스는 지우고 다시 설치한다.
+```powershell
+helm uninstall otel-demo -n otel-demo --wait
+.\scripts\deploy-demo.ps1
+```
 
 ### up.ps1에서 02-addons가 실패한다
 - `Error: Kubernetes cluster unreachable`: kubeconfig나 IP 허용 목록 문제다. 위의 IP 변경 항목을 확인한다.

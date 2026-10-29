@@ -12,6 +12,9 @@ override.tf.json
 *_override.tf
 *_override.tf.json
 
+# 접근 허용 IP 등 로컬 전용 Helm values
+*.local.yaml
+
 # kubeconfig 등 자격 증명
 kubeconfig*
 *.pem
