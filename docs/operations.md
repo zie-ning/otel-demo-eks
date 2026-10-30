@@ -14,12 +14,13 @@
 | 02-addons | `terraform/02-addons` | AWS Load Balancer Controller, metrics-server | S3 `02-addons/terraform.tfstate` | 작업할 때만 |
 
 **순서**
-- 생성: `01-cluster` → kubeconfig 갱신 → `02-addons` → (앱 배포)
+- 생성: `01-cluster` → kubeconfig 갱신 → `02-addons` → 관측 스택(`deploy-observability.ps1`) → 데모(`deploy-demo.ps1`)
 - 삭제: (Ingress·LoadBalancer Service 삭제) → `02-addons` → `01-cluster`
 
 `02-addons`는 `01-cluster`의 출력값(클러스터 이름, VPC ID)을 S3 state에서 읽는다. 그래서 `01-cluster`가 먼저 있어야 한다.
 
 ### 노드그룹
+
 | 노드그룹 | 타입 × 수 | 라벨 / taint | 용도 |
 |---|---|---|---|
 | app | m7i-flex.large × 2 | `role=app` | OTel Demo 서비스, 시스템 파드 |
@@ -46,6 +47,21 @@
 - 소요 시간: 처음 생성할 때 약 15~20분
 - 각 apply는 plan을 보여주고 `yes` 입력을 기다린다. 확인 없이 진행하려면 `-AutoApprove`를 붙인다.
 
+### 관측 스택 배포 (데모보다 먼저)
+```powershell
+.\scripts\deploy-observability.ps1            # monitoring 네임스페이스에 kube-prometheus-stack 설치/업그레이드
+.\scripts\deploy-observability.ps1 -Template  # 렌더링 결과만 확인
+```
+- values: `helm/values/kube-prometheus-stack.yaml`, 데모 대시보드·알림: `helm/grafana/` (kustomize, server-side apply)
+- Collector가 이 스택의 Prometheus(`kps-prometheus.monitoring:9090`)로 메트릭을 보내므로 데모보다 먼저 설치한다. 순서가 바뀌어도 데모는 동작하지만, 설치 전까지 Collector 로그에 전송 실패가 쌓인다.
+- 저장소는 emptyDir라 Prometheus·Grafana 파드가 재시작되거나 클러스터를 지우면 메트릭과 Grafana에서 직접 고친 내용이 사라진다. 대시보드 수정은 `helm/grafana/`에 반영하고, 증거는 삭제 전에 저장한다.
+- Grafana: `http://<ALB 주소>/grafana/`. 대시보드 폴더는 **OpenTelemetry Demo**(데모 앱)와 **Kubernetes**(클러스터·노드). 익명은 읽기 전용, 편집은 `admin` 로그인. 비밀번호는 스크립트가 처음 설치할 때 무작위로 만든다(Git에 없음).
+  ```powershell
+  $s = kubectl get secret grafana-admin -n monitoring -o json | ConvertFrom-Json
+  [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s.data.'admin-password'))
+  ```
+- Prometheus·Alertmanager UI는 외부에 노출하지 않는다. 필요하면 `kubectl port-forward -n monitoring svc/kps-prometheus 9090`
+
 ### 데모 배포
 ```powershell
 .\scripts\deploy-demo.ps1            # 설치/업그레이드 (차트 버전 고정, 모든 파드 Ready까지 대기)
@@ -53,7 +69,7 @@
 ```
 - values: `helm/values/otel-demo.yaml` (커밋), ALB 허용 IP는 실행 시 `helm/values/otel-demo.local.yaml`로 생성 (커밋 안 함)
 - 접속 주소: `kubectl get ingress -n otel-demo`의 ADDRESS. ALB는 생성 후 2~3분 뒤부터 응답한다
-- 경로: `/`(쇼핑몰), `/jaeger/ui/`, `/grafana/`, `/feature/`(장애 플래그), `/loadgen/`(Locust)
+- 경로: `/`(쇼핑몰), `/jaeger/ui/`, `/grafana/`(kube-prometheus-stack의 Grafana), `/feature/`(장애 플래그), `/loadgen/`(Locust)
 
 ### 작업 종료
 ```powershell
@@ -195,6 +211,22 @@ helm uninstall otel-demo -n otel-demo --wait
 
 ---
 
+### Grafana 자체 메트릭 수집 대상이 down이다 (리다이렉트)
+- 증상: kps Prometheus의 `kube-prometheus-stack-grafana` 대상이 `Get "http://localhost:3000/grafana/metrics": connection refused`
+- 원인: `serve_from_sub_path: true`라 `/metrics` 요청이 `root_url` 기준 `localhost:3000/grafana/metrics`로 리다이렉트된다. 수집기 입장의 localhost는 자기 자신이다.
+- 해결: `grafana.serviceMonitor.path: /grafana/metrics`
+
+### 데모 알림 규칙이 Grafana에 로드되지 않는다
+- 증상: 알림 사이드카 로그에 `provisioning/alerting/reload` 500, Grafana 로그에 `receiver grafana-default-email does not exist`
+- 원인: 데모 알림 규칙의 수신처가 데모 차트 내장 Grafana의 기본 contact point인데, kps Grafana에는 contact point가 없다.
+- 해결: `helm/grafana/alerting/contact-points.yml`로 Alertmanager contact point를 만들고 규칙의 수신처를 바꿨다.
+
+### values에서 뺀 Grafana 데이터소스가 계속 보인다
+- 원인: Grafana는 한 번 프로비저닝한 데이터소스를 내부 DB에 남긴다. 설정에서 빼도 자동으로 지우지 않는다.
+- 해결: 이 클러스터의 Grafana DB는 emptyDir라 `kubectl rollout restart deploy/kube-prometheus-stack-grafana -n monitoring`으로 새로 시작하면 정리된다.
+
+---
+
 ## 6. 버전 관리 정책
 
 | 대상 | 고정 위치 | 현재 값 |
@@ -206,6 +238,8 @@ helm uninstall otel-demo -n otel-demo --wait
 | EKS 모듈 | `01-cluster/eks.tf` | `~> 21.0` |
 | EKS 버전 | `01-cluster/variables.tf`의 `kubernetes_version` | `1.37` |
 | Load Balancer Controller 차트 | `02-addons/variables.tf` | `3.6.2` |
+| OpenTelemetry Demo 차트 | `scripts/deploy-demo.ps1` | `0.42.6` |
+| kube-prometheus-stack 차트 | `scripts/deploy-observability.ps1` | `92.16.0` |
 | 로컬 kubectl | winget 설치본 (PowerShell 프로필 별칭) | 클러스터와 ±1 마이너 이내 유지 |
 
 **업그레이드 절차**

@@ -1,6 +1,7 @@
 # opentelemetry-demo 차트 values (차트 버전은 scripts/deploy-demo.ps1에서 고정)
-# Phase 2: 차트 기본 관측 스택(Jaeger, Prometheus, Grafana, OpenSearch)을 그대로 쓰되,
-# 앱과 관측 도구가 서로 다른 노드그룹에 배치되도록 스케줄링 규칙만 지정한다.
+# 앱과 관측 도구가 서로 다른 노드그룹에 배치되도록 스케줄링 규칙을 지정한다.
+# 차트 내장 관측 도구 중 Prometheus·Grafana는 kube-prometheus-stack으로 대체해 끄고(Phase 3-B ④),
+# Jaeger·OpenSearch는 Tempo·Loki로 바꿀 때까지(⑤⑥) 유지한다.
 
 # 데모 서비스는 모두 app 노드그룹에 배치
 default:
@@ -19,6 +20,12 @@ components:
   # 외부 진입점. AWS Load Balancer Controller가 이 Ingress를 보고 ALB를 만든다.
   # 접근 허용 IP(inbound-cidrs)는 커밋하지 않도록 배포 스크립트가 따로 주입한다.
   frontend-proxy:
+    # /grafana 경로를 kube-prometheus-stack의 Grafana로 보낸다 (Phase 3-B ④, 내장 Grafana 비활성화)
+    envOverrides:
+      - name: GRAFANA_HOST
+        value: kube-prometheus-stack-grafana.monitoring.svc.cluster.local
+      - name: GRAFANA_PORT
+        value: "80"
     ingress:
       enabled: true
       ingressClassName: alb
@@ -49,6 +56,15 @@ opentelemetry-collector:
 
   # 차트 기본 설정 위에 덮어쓴다. 목록(배열)은 병합되지 않고 통째로 바뀌므로 기존 항목도 다시 적는다.
   config:
+    exporters:
+      # kube-prometheus-stack의 Prometheus (monitoring 네임스페이스).
+      # ③에서 내장 Prometheus와 병행 전송해 같은 결과를 확인했고, ④에서 이쪽으로 일원화했다.
+      otlp_http/kps:
+        endpoint: http://kps-prometheus.monitoring:9090/api/v1/otlp
+        tls:
+          insecure: true
+        sending_queue:
+          batch: {}
     processors:
       # OBS-2 (#2): cart(.NET), accounting(.NET), quote(PHP) SDK가 보내는 container.id는 실제 컨테이너가 아니라
       # 파드 샌드박스 ID다. containerd + cgroup v2 환경이라 /proc/self/cgroup에 ID가 없어서
@@ -140,6 +156,10 @@ opentelemetry-collector:
             - transform/redact_sensitive_data
             - redaction
         metrics:
+          # 차트 기본 otlp_http/prometheus(내장 Prometheus)를 otlp_http/kps로 교체
+          exporters:
+            - otlp_http/kps
+            - debug
           # 차트 기본 순서에 transform/drop_sdk_container_id(OBS-2),
           # transform/browser_resource(span_metrics로 만든 브라우저 메트릭 처리, OBS-3) 추가
           processors:
@@ -170,13 +190,25 @@ jaeger:
         operator: Equal
         value: monitoring
         effect: NoSchedule
+    # 차트 기본 목록에서 PROMETHEUS_ADDR만 kube-prometheus-stack으로 변경 (Jaeger Monitor 탭이 span metrics를 조회)
+    extraEnv:
+      - name: MEMORY_MAX_TRACES
+        value: "25000"
+      - name: PROMETHEUS_ADDR
+        value: kps-prometheus.monitoring:9090
+      - name: OTEL_COLLECTOR_HOST
+        value: otel-collector
+      - name: OTEL_COLLECTOR_PORT_HTTP
+        value: "4318"
+      - name: JAEGER_HOST
+        value: "0.0.0.0"
 
+# Phase 3-B ④: kube-prometheus-stack(monitoring 네임스페이스)의 Prometheus·Grafana로 대체
 prometheus:
-  server:
-    <<: *monitoringNode
+  enabled: false
 
 grafana:
-  <<: *monitoringNode
+  enabled: false
 
 opensearch:
   <<: *monitoringNode

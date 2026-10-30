@@ -1,0 +1,18 @@
+# Grafana 관리 알림을 kube-prometheus-stack의 Alertmanager로 보낸다 (Phase 3-B ④에서 추가).
+# 데모 차트 내장 Grafana에는 기본 contact point(grafana-default-email)가 있었지만 kps Grafana에는 없어
+# 데모 알림 규칙이 로드되지 않았다. 알림 채널(Slack 등)은 Phase 4에서 Alertmanager에 설정한다.
+apiVersion: 1
+contactPoints:
+  - orgId: 1
+    name: kps-alertmanager
+    receivers:
+      - uid: kps-alertmanager
+        type: prometheus-alertmanager
+        settings:
+          url: http://kps-alertmanager.monitoring:9093
+policies:
+  - orgId: 1
+    receiver: kps-alertmanager
+    group_by:
+      - grafana_folder
+      - alertname

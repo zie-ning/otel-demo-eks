@@ -1,6 +1,6 @@
 # OpenTelemetry Demo on AWS EKS — 프로젝트 계획
 
-> 작성일: 2026-10-29 · 진행 상황 갱신: 2026-10-30 (Phase 2 완료)
+> 작성일: 2026-10-29 · 진행 상황 갱신: 2026-10-30 (Phase 3 진행 중: 3-A, 3-B ③④ 완료)
 > 목적: 포트폴리오용. OpenTelemetry Demo를 AWS EKS에 배포하고, 오픈소스 관측 스택으로 모니터링·알림을 구성한 뒤 장애 주입 시나리오를 수행해 **탐지 → 분석 → 원인 규명 → 재발 방지** 과정을 문서로 남긴다.
 
 ---
@@ -102,63 +102,51 @@
 
 ## 5. 진행 단계
 
-### Phase 0. 사전 준비 ✅ (2026-10-29)
-- [x] AWS 계정 / IAM 사용자 준비: `terraform-admin` 프로필 (IAM 사용자 `terraform_admin`). MFA 설정 여부는 미확인
-- [x] 로컬 도구 설치: AWS CLI 2.30, Terraform 1.15, kubectl 1.37(PowerShell 별칭), Helm 4.3
-- [x] AWS Budgets 알림 설정: 월 $40, 크레딧 차감 전 금액 기준 (`terraform/00-bootstrap`)
-- [x] Terraform state 백엔드(S3) 생성: `otel-demo-tfstate-520426835144`, 버전 관리·암호화·퍼블릭 차단
-- [x] GitHub 저장소 생성: [zie-ning/otel-demo-eks](https://github.com/zie-ning/otel-demo-eks) (공개)
+Phase별 목표·상태·핵심 결과만 적는다. 진행 과정, 수치, 문제 해결 기록은 각 Phase 상세 문서(`docs/phases/`)에 있다.
 
-### Phase 1. 인프라 (Terraform) ✅ (2026-10-29)
-- [x] VPC: 퍼블릭 서브넷 2개 AZ(2a, 2c), NAT 없음
-- [x] EKS 1.37 클러스터 + 매니지드 노드그룹 (온디맨드): app × 2, monitoring × 1(taint)
-  - 무료 플랜이라 t3.xlarge가 거부되어 m7i-flex.large로 변경 ([operations.md](operations.md) 문제 해결 참고)
-- [x] API 엔드포인트 접근 CIDR 제한 + 프라이빗 엔드포인트
-- [x] 애드온 단계(별도 apply): AWS Load Balancer Controller(Pod Identity), metrics-server
-  - EBS CSI Driver는 제외: 영구 볼륨 없이 운영하고 클러스터 삭제 시 데이터도 함께 사라지는 방식이라 불필요. 필요해지면 추가
-- [x] up/down 스크립트, 운영 지침([operations.md](operations.md))
-- **완료 기준**: `kubectl get nodes` 정상 ✅, `down.ps1`로 깨끗하게 삭제되는 것까지 확인 ✅ (2026-10-30, 02-addons 6개 + 01-cluster 50개 삭제, EKS·EC2·ALB·VPC·EBS·ENI 잔여 없음. 첫 실행에서 스크립트 버그 2건 수정 후 재실행)
+| Phase | 내용 | 상태 | 상세 기록 |
+|---|---|---|---|
+| 0 | 사전 준비 | ✅ 2026-10-29 | [phase-0-preparation.md](phases/phase-0-preparation.md) |
+| 1 | 인프라 (Terraform) | ✅ 2026-10-29 | [phase-1-infrastructure.md](phases/phase-1-infrastructure.md) |
+| 2 | 데모 배포와 트레이스 관찰 | ✅ 2026-10-30 | [phase-2-demo-deploy.md](phases/phase-2-demo-deploy.md) |
+| 3 | 관측 데이터 품질 수정, 관측 스택 전환 | 🔄 진행 중 | [phase-3-observability-stack.md](phases/phase-3-observability-stack.md) |
+| 4 | SLO와 알림 | 예정 | |
+| 5 | 장애 주입 시나리오 | 예정 | |
+| 6 | 문서화 | 예정 | |
 
-### Phase 2. 데모 배포 (Helm, 기본 구성) ✅ (2026-10-29)
-- [x] opentelemetry-demo 차트 0.42.6(앱 3.1.0)을 **기본 관측 스택 그대로** 배포해 정상 동작 확인
-  - 데모 서비스는 app 노드, Jaeger·Prometheus·Grafana·OpenSearch는 monitoring 노드, Collector는 DaemonSet으로 전 노드
-- [x] Ingress(ALB, target-type ip) + 본인 IP 제한 (`scripts/deploy-demo.ps1`)
-- [x] 트레이스 관찰 1단계: quote·shipping 직접 호출 트레이스 분석, 관측 데이터 품질 문제 발견 ([observability-findings.md](observability-findings.md))
-- [x] 트레이스 관찰 2단계 (2026-10-30): 화면 동작(홈, 상품 클릭, 장바구니 담기, 주문)별 트레이스 관찰. 통화 변경은 생략
-  - 브라우저 트레이스가 수집되지 않던 문제(OBS-4)를 발견해 수정: `PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`를 상대 경로로 변경
-  - 주문 1건 = checkout 트레이스(스팬 58개) + Kafka 뒤 별도 트레이스 2개(accounting, fraud-detection, `FOLLOWS_FROM` 링크)
-  - 발견한 패턴: 서비스 간 호출에서 처리보다 연결·대기 비용이 큼(`dns.lookup`/`tcp.connect`는 첫 연결 때만), 추천의 N+1 호출, checkout 내부 미계측 구간 약 70ms, payment·cart의 원격 flagd 질의 비용, 브라우저-서버 시계 차이 약 0.88초
-  - 추가 품질 문제: OBS-5(accounting 소비 스팬이 대기 시간 포함), OBS-2 대상에 accounting 추가
-- **완료 기준**: ALB 주소로 쇼핑몰 접속 ✅, load-generator 트래픽 흐름 ✅, Jaeger에서 트레이스 확인 ✅ (서비스 21개, 주문 트레이스 확인)
-- 장애 시나리오와 비교할 **정상 주문 트레이스** `54e11879d961993975e9bdfbbca50178` 화면 캡처 (2026-10-30)
-  - [전체 화면](evidence/phase2/normal-order-trace-full.png): 브라우저 스팬까지 포함. 브라우저 시계 차이(약 0.88초) 때문에 가로축이 1.1초로 늘어나 서버 막대가 왼쪽에 몰림
-  - [서버 구간 확대](evidence/phase2/normal-order-trace-server-zoom.png): 미니맵에서 2.6ms~188ms 구간을 선택한 화면. checkout의 직렬 계단 구조가 잘 보임
+### Phase 0. 사전 준비
+✅ 완료 (2026-10-29) · [상세](phases/phase-0-preparation.md)
+- [x] 자격 증명(`terraform-admin` 프로필), 로컬 도구(AWS CLI, Terraform, kubectl, Helm)
+- [x] Terraform state S3 버킷, AWS Budgets 월 $40 알림 (`terraform/00-bootstrap`)
+- [x] GitHub 저장소 (공개)
 
-### Phase 3. 관측 스택 전환 (한 단계씩 바꾸고 매번 검증)
-**3-A. 관측 데이터 품질 수정 (먼저 진행)** — [observability-findings.md](observability-findings.md)
-- [x] ① Collector 설정 수정 (브랜치 `obs/collector-resource-attributes`, 2026-10-30)
-  - OBS-1 (#1): `system` 감지기를 빼고 `host.name`을 실행 노드 이름으로 통일 → 20개 서비스 전부 Collector 이름 → 0
-  - OBS-3 (#3): `frontend-web` 데이터에서 `k8s.*`, `container.*`, `host.name`, `service.instance.id` 제거 → 50/50 → 0/50
-  - OBS-6 (#4): ALB 헬스체크를 Envoy 관리 포트 `10000`의 `/ready`로 옮김 (Collector 필터는 스팬 단위라 고아 스팬이 남아 제외) → frontend-proxy 트레이스 중 261/500 → 0/500
-  - 집계 스크립트: `scripts/check-resource-attributes.ps1`
-- [x] ② OBS-2 파드 메타데이터 (브랜치 `obs/obs-2-pod-metadata`, 2026-10-30)
-  - OBS-2 (#2): 잘못된 `container.id`가 파드 샌드박스 ID임을 확인. 처음 계획한 Downward API 주입은 `k8s_attributes`가 첫 규칙(`container.id`)에서 멈춰 효과가 없어, Collector에서 매칭 전에 지우고 쿠버네티스 API 값으로 다시 채움 → cart·quote·accounting `k8s.pod.name` 0 → 전부
-  - 앱 파드 재시작 없음
-- OBS-5는 데모 코드의 계측 방식 문제라 기록만 유지
-- OBS-7 (#6)(init 컨테이너가 있는 파드에 컨테이너 단위 속성 없음)은 ② 검증 중 발견. 파드·노드 단위 분석에는 영향이 없어 기록만 하고 필요할 때 처리
-- **완료 기준**: Jaeger에서 수정 전과 같은 방식으로 집계해, 모든 서버 서비스에 `k8s.pod.name`이 붙고 `frontend-web`에는 없으며 `host.name`이 Collector 파드 이름이 아님을 확인. 결과를 observability-findings.md에 기록 ✅ (2026-10-30)
+### Phase 1. 인프라 (Terraform)
+✅ 완료 (2026-10-29) · [상세](phases/phase-1-infrastructure.md)
+- [x] VPC(퍼블릭 서브넷 2개 AZ, NAT 없음), EKS 1.37, 노드그룹 app × 2 / monitoring × 1(taint), m7i-flex.large
+- [x] API 엔드포인트 본인 IP 제한, AWS Load Balancer Controller·metrics-server (`02-addons`)
+- [x] `up.ps1` / `down.ps1`, 운영 지침([operations.md](operations.md))
+- **완료 기준**: `kubectl get nodes` 정상 ✅, `down.ps1`로 잔여 리소스 없이 삭제 ✅
 
-**3-A를 먼저 하는 이유**
-- Prometheus는 `host.name`, `k8s.pod.name` 등 리소스 속성을 **메트릭 라벨로 승격**한다. 잘못된 값이 대시보드·알림 규칙에 굳기 전에 바로잡는다.
-- Tempo로 바꾸기 전에 고치면 **같은 Jaeger, 같은 집계 방식으로 수정 전후를 비교**할 수 있다.
-- 수정 대상(Collector 가공 설정, 앱 환경변수)이 저장소 교체와 독립적이다.
-- ①과 ②는 영향 범위(Collector 하나 / 여러 서비스 배포 설정)가 달라 브랜치를 나눠 따로 검증·되돌릴 수 있게 한다.
+### Phase 2. 데모 배포 (Helm, 기본 구성)
+✅ 완료 (2026-10-30) · [상세](phases/phase-2-demo-deploy.md)
+- [x] opentelemetry-demo 차트 0.42.6을 기본 관측 스택 그대로 배포, ALB Ingress(본인 IP 제한)
+- [x] 서비스 직접 호출·화면 동작별 트레이스 관찰, 관측 데이터 품질 문제 OBS-1~5 발견([observability-findings.md](observability-findings.md))
+- [x] 정상 주문 트레이스 캡처 (Phase 5 비교용)
+- **완료 기준**: ALB로 쇼핑몰 접속 ✅, load-generator 트래픽 ✅, Jaeger에서 트레이스 확인 ✅
 
-**3-B. 관측 스택 전환 (한 단계씩 바꾸고 매번 검증)**
-- [ ] ③ kube-prometheus-stack 설치, OTLP 수신 활성화 → Collector 메트릭 대상 변경 → 차트 내장 Prometheus 비활성화
-- [ ] ④ Grafana 일원화: 데모 대시보드 ConfigMap 이전 → 차트 내장 Grafana 비활성화
-- [ ] ⑤ Tempo 도입 → 차트 내장 Jaeger 비활성화
-- [ ] ⑥ Loki 도입 → 차트 내장 OpenSearch 비활성화
+### Phase 3. 관측 스택 전환
+🔄 진행 중 · [상세](phases/phase-3-observability-stack.md)
+
+**3-A. 관측 데이터 품질 수정** ✅
+- [x] ① Collector 리소스 속성 수정: OBS-1, OBS-3, OBS-6 (PR #5)
+- [x] ② 파드 메타데이터: OBS-2 (PR #7). OBS-7은 기록만
+- **완료 기준**: 모든 서버 서비스에 `k8s.pod.name`, `frontend-web`에는 없음, `host.name`이 Collector 파드 이름 아님 ✅
+
+**3-B. 관측 스택 전환** (한 단계씩 바꾸고 매번 검증)
+- [x] ③ kube-prometheus-stack 설치, 내장 Prometheus와 병행 전송해 동일성 확인
+- [x] ④ Grafana 일원화: kps Grafana로 대시보드·알림 이전, 내장 Prometheus·Grafana 비활성화
+- [ ] ⑤ Tempo 도입 → 내장 Jaeger 비활성화
+- [ ] ⑥ Loki 도입 → 내장 OpenSearch 비활성화
 - [ ] ⑦ Grafana 데이터소스 연결: exemplar → 트레이스, 트레이스 → 로그
 - **완료 기준**: Grafana 하나에서 메트릭 → 트레이스 → 로그로 이동 가능
 
@@ -170,6 +158,7 @@
 - **완료 기준**: 의도적으로 에러를 내면 알림이 실제로 도착
 
 ### Phase 5. 장애 주입 시나리오
+
 | # | 시나리오 | 주입 방법 | 보여줄 포인트 |
 |---|---|---|---|
 | 1 | 결제 실패율 증가 | flagd `paymentFailure` | SLO 알림 → 트레이스로 원인 서비스 특정 |
@@ -195,10 +184,10 @@
 |---|---|---|
 | 알림 채널 | Slack / Discord / 이메일 | Phase 4 |
 | 장애 주입 도구 | flagd만 / Chaos Mesh 추가 | Phase 5 |
-| 노드 크기·대수 | m7i-flex.large × 3에서 실측 후 조정 | Phase 3 |
+| kps와 Collector의 인프라 지표 중복 수집 | 한쪽으로 정리 / 둘 다 유지 | Phase 3 ⑦ 이후 |
 | GitOps(Argo CD) 전환 | 선택 과제 | Phase 6 이후 |
 
-정해진 사항: Terraform state는 **S3** (Phase 0), 저장소는 **GitHub 공개** (Phase 0)
+정해진 사항: Terraform state는 **S3** (Phase 0), 저장소는 **GitHub 공개** (Phase 0), 노드는 m7i-flex.large × 3 유지 (근거 수치는 [Phase 3 상세](phases/phase-3-observability-stack.md))
 
 ### 저장소 구조 (✅ 생성됨 / 예정)
 ```
@@ -207,13 +196,13 @@
 │   ├── 00-bootstrap/      # ✅ state 버킷, 예산 알림 (영구)
 │   ├── 01-cluster/        # ✅ VPC, EKS, 노드그룹
 │   └── 02-addons/         # ✅ Load Balancer Controller, metrics-server
-├── helm/values/           # ✅ otel-demo / 예정: kube-prometheus-stack, tempo, loki
-├── observability/         # 예정
-│   ├── dashboards/        #   Grafana 대시보드 (ConfigMap)
-│   └── alerts/            #   PrometheusRule (SLO, burn-rate)
+├── helm/
+│   ├── values/            # ✅ otel-demo, kube-prometheus-stack / 예정: tempo, loki
+│   └── grafana/           # ✅ 데모 대시보드·알림 (kustomize ConfigMap)
+├── observability/alerts/  # 예정: PrometheusRule (SLO, burn-rate)
 ├── scenarios/             # 예정: 시나리오별 실행 절차와 포스트모템
-├── scripts/               # ✅ up / deploy-demo / down
-└── docs/                  # ✅ PLAN, operations, observability-findings
+├── scripts/               # ✅ up / deploy-observability / deploy-demo / down / check-resource-attributes
+└── docs/                  # ✅ PLAN, phases/(Phase 상세), operations, observability-findings, evidence/
 ```
 
 ---

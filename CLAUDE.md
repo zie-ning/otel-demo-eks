@@ -8,14 +8,16 @@ OpenTelemetry Demo를 AWS EKS에 배포하고 관측 스택 구성, 장애 주�
 - 변수명, 함수명, 파일명, 리소스 이름: 영어
 
 ## 2. 저장소 구조
+
 | 경로 | 내용 |
 |---|---|
 | `terraform/00-bootstrap` | state 버킷, 예산 알림. **로컬 state, 영구 유지. 절대 destroy 금지** |
 | `terraform/01-cluster` | VPC, EKS, 노드그룹(app 2 / monitoring 1, taint). S3 backend |
 | `terraform/02-addons` | AWS Load Balancer Controller, metrics-server. S3 backend |
 | `helm/values/` | Helm values. 차트 버전은 배포 스크립트에 고정 |
-| `scripts/` | `up.ps1`, `deploy-demo.ps1`, `down.ps1`, 공통 함수 `common.ps1` |
-| `docs/` | `PLAN.md`(계획·진행), `operations.md`(운영·문제 해결), `observability-findings.md`(관측 데이터 품질 문제) |
+| `helm/grafana/` | 데모 대시보드·알림 규칙(데모 차트에서 이전, kustomize ConfigMap) |
+| `scripts/` | `up.ps1`, `deploy-observability.ps1`, `deploy-demo.ps1`, `down.ps1`, 공통 함수 `common.ps1` |
+| `docs/` | `PLAN.md`(계획·Phase 요약), `phases/`(Phase 상세 기록), `operations.md`(운영·문제 해결), `observability-findings.md`(관측 데이터 품질 문제), `evidence/`(증거) — 역할은 9장 |
 
 ## 3. 비용과 클러스터 수명
 - 클러스터는 **작업할 때만** 띄운다. 켜져 있으면 시간당 약 $0.50이 나간다.
@@ -44,8 +46,9 @@ OpenTelemetry Demo를 AWS EKS에 배포하고 관측 스택 구성, 장애 주�
 - **kubectl**: 시스템 PATH의 Docker Desktop kubectl(구버전)이 먼저 잡힌다. 스크립트에서는 `common.ps1`의 `$Kubectl`(winget 설치본)을 쓴다.
 - **Helm·kubectl을 못 찾을 때**: 셸의 PATH가 갱신되지 않은 경우다. Machine + User PATH를 다시 읽어 실행한다.
 
-## 7. 데모 배포 관련
-- 데모는 `.\scripts\deploy-demo.ps1`로만 설치·업그레이드한다(차트 0.42.6 고정, ALB 허용 IP 자동 주입).
+## 7. 데모·관측 스택 배포 관련
+- 관측 스택은 `.\scripts\deploy-observability.ps1`(monitoring 네임스페이스), 데모는 `.\scripts\deploy-demo.ps1`(차트 0.42.6 고정, ALB 허용 IP 자동 주입)로만 설치·업그레이드한다. 관측 스택을 먼저 설치한다.
+- Grafana는 kube-prometheus-stack의 것이다. 대시보드·알림은 UI에서 고치지 말고 `helm/grafana/`를 고쳐 다시 적용한다(Grafana DB가 emptyDir라 재시작하면 UI 수정이 사라짐). admin 비밀번호는 Secret `grafana-admin`에 있고 대화·문서·커밋에 쓰지 않는다.
 - `helm upgrade`를 하면 **load-generator가 차트 기본값(1개)으로 되살아난다.** 트레이스 관찰처럼 트래픽을 멈춰야 하는 작업 중이면 업그레이드 후 다시 0으로 줄인다.
 - 데모 서비스는 app 노드, 관측 도구는 monitoring 노드(taint `dedicated=monitoring:NoSchedule`)에 배치한다. 새 관측 컴포넌트를 추가할 때는 toleration과 `nodeSelector: role=monitoring`을 함께 준다. DaemonSet은 toleration만 준다.
 - 접근 허용 IP는 실행 시점의 공인 IP로 갱신된다. 공인 IP가 바뀌면 `up.ps1`(API 엔드포인트)과 `deploy-demo.ps1`(ALB)을 다시 실행한다.
@@ -57,11 +60,27 @@ OpenTelemetry Demo를 AWS EKS에 배포하고 관측 스택 구성, 장애 주�
 - 브라우저(`frontend-web`) 스팬과 서버 스팬은 시계가 다르다(사용자 PC가 약 0.88초 빠름). 둘 사이는 시작 시각이 아니라 **소요 시간 차이**로만 비교한다.
 - Jaeger Search의 서비스 필터는 루트 서비스가 아니라 **그 서비스의 스팬이 포함된 트레이스**를 모두 보여준다.
 
-## 9. 문서 갱신 규칙
-- 관측 데이터 품질 문제를 발견하면 `docs/observability-findings.md`에 **OBS-번호**로 증상(실제 수치와 트레이스 ID), 원인(확인/추정 구분), 영향, 해결 방향, 상태를 기록한다.
-- 인프라·스크립트 문제와 해결은 `docs/operations.md`의 문제 해결에 기록한다.
-- 단계를 마치면 `docs/PLAN.md`의 체크리스트와 완료 기준, `README.md`의 진행 상황을 갱신한다.
-- 장애 시나리오(Phase 5)는 포스트모템 형식(탐지 → 분석 → 원인 → 조치 → 재발 방지)으로 남기고, 증거(스크린샷, 트레이스 ID, 대시보드 export)는 클러스터 삭제 전에 저장한다.
+## 9. 문서 관리
+### 문서별 역할 (같은 내용을 여러 문서에 복사하지 않고 링크한다)
+
+| 문서 | 담는 것 | 담지 않는 것 |
+|---|---|---|
+| `docs/PLAN.md` | 확정된 결정, 아키텍처, 보안·비용 계획, **Phase 단위 요약**(상태, 핵심 항목 3~5줄 체크리스트, 완료 기준, 상세 문서 링크), 미결정 사항, 리스크 | 진행 과정, 수치, 트레이스 ID, 문제 해결 경위 |
+| `docs/phases/phase-N-<이름>.md` | Phase **상세 기록**: 목표, 결정과 근거, 진행 내용, 검증 결과(실제 수치·트레이스 ID), 진행 중 발견·수정한 것, 확인만 한 것, 남은 일, 관련 PR·이슈 | 다음에 다시 쓸 운영 절차 (→ operations.md) |
+| `docs/operations.md` | 반복해서 쓰는 운영 절차(켜기·배포·끄기), 규칙, 비용, **재발할 수 있는 문제의 해결법** | 일회성 작업 기록 |
+| `docs/observability-findings.md` | 관측 데이터 품질 문제(OBS-번호) | |
+| `docs/evidence/phaseN/` | 스크린샷, 대시보드 export 등 증거 파일 | |
+| `README.md` | 프로젝트 소개, 저장소 구조, Phase 진행 상황 한 줄씩 | |
+
+### 작성 규칙
+- Phase를 시작할 때 `docs/phases/phase-N-<영어-짧은-이름>.md`를 만들고 PLAN.md의 Phase 표와 해당 Phase 절에 링크한다. 상단에 상태·기간·PLAN 링크를 둔다.
+- 작업 중 기록은 Phase 상세 문서에 쓴다. 단계(예: ③)를 마치면 상세 문서에 결과를 쓰고, PLAN.md에는 체크 표시와 한 줄 요약만 반영한다.
+- Phase를 마치면 상세 문서의 완료 기준 → PLAN.md 상태·완료 기준 → README.md 진행 상황 순서로 갱신한다.
+- 관측 데이터 품질 문제를 발견하면 `docs/observability-findings.md`에 **OBS-번호**로 증상(실제 수치와 트레이스 ID), 원인(확인/추정 구분), 영향, 해결 방향, 상태를 기록하고 GitHub 이슈로도 등록한다.
+- 인프라·스크립트 문제와 해결은 `docs/operations.md`의 문제 해결에 기록하고, Phase 상세 문서에는 요약과 링크만 둔다.
+- 사실과 추정을 구분해 쓰고, 추정이 틀린 것으로 확인되면 지우지 않고 정정했다고 남긴다(예: 취소선 + 정정 이유).
+- 장애 시나리오(Phase 5)는 포스트모템 형식(탐지 → 분석 → 원인 → 조치 → 재발 방지)으로 남기고, 증거(스크린샷, 트레이스 ID, 대시보드 export)는 클러스터 삭제 전에 `docs/evidence/`에 저장한다.
+- 비밀번호·이메일·IP 같은 민감 정보는 어떤 문서에도 쓰지 않는다.
 
 ## 10. 브랜치, 커밋, PR
 Phase 2까지는 `main`에 바로 커밋했다. **Phase 3부터는 기능 브랜치 → PR → `main` 머지** 방식으로 작업한다.
