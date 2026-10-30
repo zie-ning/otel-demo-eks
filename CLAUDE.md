@@ -47,18 +47,21 @@ OpenTelemetry Demo를 AWS EKS에 배포하고 관측 스택 구성, 장애 주�
 - **Helm·kubectl을 못 찾을 때**: 셸의 PATH가 갱신되지 않은 경우다. Machine + User PATH를 다시 읽어 실행한다.
 
 ## 7. 데모·관측 스택 배포 관련
-- 관측 스택은 `.\scripts\deploy-observability.ps1`(monitoring 네임스페이스), 데모는 `.\scripts\deploy-demo.ps1`(차트 0.42.6 고정, ALB 허용 IP 자동 주입)로만 설치·업그레이드한다. 관측 스택을 먼저 설치한다.
-- Grafana는 kube-prometheus-stack의 것이다. 대시보드·알림은 UI에서 고치지 말고 `helm/grafana/`를 고쳐 다시 적용한다(Grafana DB가 emptyDir라 재시작하면 UI 수정이 사라짐). admin 비밀번호는 Secret `grafana-admin`에 있고 대화·문서·커밋에 쓰지 않는다.
+- 관측 스택(kube-prometheus-stack·Tempo·Loki)은 `.\scripts\deploy-observability.ps1`(monitoring 네임스페이스), 데모는 `.\scripts\deploy-demo.ps1`(차트 0.42.6 고정, ALB 허용 IP 자동 주입)로만 설치·업그레이드한다. 관측 스택을 먼저 설치한다. 데모 차트의 내장 관측 도구(Prometheus·Grafana·Jaeger·OpenSearch)는 모두 꺼져 있다.
+- Grafana는 kube-prometheus-stack의 것이다. 대시보드·알림은 UI에서 고치지 말고 `helm/grafana/`를 고쳐 다시 적용한다(Grafana DB가 emptyDir라 재시작하면 UI 수정이 사라짐). admin 비밀번호는 Secret `grafana-admin`에 있고 대화·문서·커밋에 쓰지 않으며, 로그인 화면에 대신 입력하지 않는다(브라우저 작업은 사용자가 로그인한 뒤 이어받는다).
+- Grafana 데이터소스 uid(`webstore-metrics`/`webstore-traces`/`webstore-logs`)는 대시보드가 참조하므로 바꾸지 않는다. 같은 uid로 데이터소스 이름·종류를 바꾸면 Grafana 재시작이 필요하다(operations.md 문제 해결).
 - `helm upgrade`를 하면 **load-generator가 차트 기본값(1개)으로 되살아난다.** 트레이스 관찰처럼 트래픽을 멈춰야 하는 작업 중이면 업그레이드 후 다시 0으로 줄인다.
 - 데모 서비스는 app 노드, 관측 도구는 monitoring 노드(taint `dedicated=monitoring:NoSchedule`)에 배치한다. 새 관측 컴포넌트를 추가할 때는 toleration과 `nodeSelector: role=monitoring`을 함께 준다. DaemonSet은 toleration만 준다.
 - 접근 허용 IP는 실행 시점의 공인 IP로 갱신된다. 공인 IP가 바뀌면 `up.ps1`(API 엔드포인트)과 `deploy-demo.ps1`(ALB)을 다시 실행한다.
 
 ## 8. 관측 데이터 분석 원칙
-- 트레이스는 Jaeger UI 외에 Jaeger HTTP API(`/jaeger/ui/api/traces/...`)로 조회해 근거를 확인한다.
+- 트레이스는 Grafana 화면 외에 Tempo HTTP API로 조회해 근거를 확인한다. ALB 경유 Grafana 데이터소스 프록시(`/grafana/api/datasources/proxy/uid/webstore-traces/api/search?q=<TraceQL>`, `/api/v2/traces/<id>`)는 익명으로 쓸 수 있다. 로그는 같은 방식으로 `webstore-logs`(Loki `/loki/api/v1/...`)를 쓴다.
+- TraceQL `select()`로 고른 속성이 없으면 Tempo는 키를 빼지 않고 문자열 `"nil"`을 돌려준다. 속성 유무는 `!= nil` 조건으로 확인한다.
+- 지표·트레이스·로그를 비교할 때는 수집 주기(데모 SDK·span metrics 1분)와 시각 필드(로그 시각이 비어 있는 서비스, OBS-8)를 먼저 확인한다.
 - 해석할 때 **확인한 사실과 추정을 구분**해서 말한다. 추정했다가 데이터로 틀린 것이 확인되면 바로잡는다고 명시한다.
 - 스팬 막대 길이(소요 시간)만 보지 말고 **이벤트(Logs)와 속성**까지 본다.
 - 브라우저(`frontend-web`) 스팬과 서버 스팬은 시계가 다르다(사용자 PC가 약 0.88초 빠름). 둘 사이는 시작 시각이 아니라 **소요 시간 차이**로만 비교한다.
-- Jaeger Search의 서비스 필터는 루트 서비스가 아니라 **그 서비스의 스팬이 포함된 트레이스**를 모두 보여준다.
+- Tempo 검색 `{resource.service.name="X"}`는 루트 서비스가 아니라 **그 서비스의 스팬이 포함된 트레이스**를 모두 보여준다(Jaeger Search의 서비스 필터와 같음). 루트만 보려면 `trace:rootService`를 쓴다.
 
 ## 9. 문서 관리
 ### 문서별 역할 (같은 내용을 여러 문서에 복사하지 않고 링크한다)

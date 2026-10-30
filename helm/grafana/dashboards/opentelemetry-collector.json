@@ -5441,8 +5441,8 @@
       "panels": [
         {
           "datasource": {
-            "type": "grafana-opensearch-datasource",
-            "uid": "${opensearch_datasource}"
+            "type": "loki",
+            "uid": "${logs_datasource}"
           },
           "description": "Logs from OpenTelemetry Collector filtered by dashboard variables",
           "fieldConfig": {
@@ -5458,48 +5458,24 @@
           "id": 42,
           "options": {
             "dedupStrategy": "none",
-            "detailsMode": "sidebar",
-            "enableInfiniteScrolling": false,
             "enableLogDetails": true,
             "prettifyLogMessage": false,
-            "showCommonLabels": false,
-            "showControls": false,
-            "showLabels": false,
-            "showLogAttributes": true,
             "showTime": true,
             "sortOrder": "Ascending",
-            "wrapLogMessage": false
+            "wrapLogMessage": true
           },
           "pluginVersion": "12.3.1",
           "targets": [
             {
-              "alias": "",
-              "bucketAggs": [
-                {
-                  "field": "observedTimestamp",
-                  "id": "2",
-                  "settings": {
-                    "interval": "auto"
-                  },
-                  "type": "date_histogram"
-                }
-              ],
               "datasource": {
-                "type": "grafana-opensearch-datasource",
-                "uid": "${opensearch_datasource}"
+                "type": "loki",
+                "uid": "${logs_datasource}"
               },
-              "format": "table",
-              "luceneQueryType": "Metric",
-              "metrics": [
-                {
-                  "id": "1",
-                  "type": "count"
-                }
-              ],
-              "query": "search source=otel-logs-* | where resource.service.name=\"$service_name\" | fields @timestamp, resource.service.name, resource.service.instance.id, resource.host.name, severity.text, body",
-              "queryType": "PPL",
-              "refId": "A",
-              "timeField": "observedTimestamp"
+              "editorMode": "code",
+              "expr": "{service_name=\"$service_name\"}",
+              "maxLines": 1000,
+              "queryType": "range",
+              "refId": "A"
             }
           ],
           "title": "OpenTelemetry Collector Logs",
@@ -5536,14 +5512,14 @@
       {
         "allowCustomValue": false,
         "current": {
-          "text": "OpenSearch",
+          "text": "Loki",
           "value": "webstore-logs"
         },
         "description": "OpenTelemetry logs.",
         "label": "Logs",
-        "name": "opensearch_datasource",
+        "name": "logs_datasource",
         "options": [],
-        "query": "grafana-opensearch-datasource",
+        "query": "loki",
         "refresh": 1,
         "regex": "(?!grafanacloud-.*-alert-state-history|grafanacloud-.*-usage-insights).+",
         "type": "datasource"

@@ -1,6 +1,6 @@
 # 관측 데이터 품질 점검 기록
 
-Phase 2에서 데모를 차트 기본 구성으로 배포한 뒤, Jaeger 트레이스를 직접 분석하며 발견한 **텔레메트리 데이터 품질 문제**를 기록한다.
+Phase 2에서 데모를 차트 기본 구성으로 배포한 뒤, Jaeger 트레이스를 직접 분석하며 발견한 **텔레메트리 데이터 품질 문제**를 기록한다. Phase 3 이후 발견한 것(OBS-7, OBS-8)도 여기에 이어 적는다.
 인프라 구축 중 겪은 문제(무료 플랜 인스턴스 거부, PowerShell stderr 처리 등)는 [operations.md](operations.md)의 문제 해결 항목에 있다.
 
 | ID | 문제 | 영향 | 상태 |
@@ -12,6 +12,7 @@ Phase 2에서 데모를 차트 기본 구성으로 배포한 뒤, Jaeger 트레�
 | OBS-5 | accounting의 `order-consumed` 스팬이 메시지 대기 시간까지 포함해 55분짜리로 기록됨 | 소요 시간 통계 왜곡, 트레이스 화면 축이 비정상적으로 길어짐 | 기록만 (데모 코드 영역) |
 | OBS-6 | ALB 헬스체크가 15초마다 frontend-proxy → frontend 트레이스를 만듦 | 실제 트래픽 트레이스가 묻히고 요청 수·지연 지표 왜곡 | **해결** (2026-10-30, #4) |
 | OBS-7 | init 컨테이너가 있는 파드의 서비스에 컨테이너 단위 속성(`k8s.container.name`, `container.id`, `container.image.*`)이 없음 | 컨테이너 재시작·이미지 버전 단위 분석 불가 | 미해결 (#6) |
+| OBS-8 | currency·shipping 로그의 로그 시각(`timeUnixNano`)이 비어 있음 | 로그 시각 기준 도구에서 1970년으로 밀려 안 보임 | 기록만 (#9, Loki는 수신 시각 사용) |
 
 환경: 차트 `opentelemetry-demo` 0.42.6 (앱 3.1.0), Collector는 DaemonSet 모드(노드마다 1개), 확인일 2026-10-29
 
@@ -272,13 +273,43 @@ accounting [internal] order-consumed   시작 09:23:18.827   소요 3,303,176ms 
 
 ---
 
+## OBS-8. currency·shipping 로그의 로그 시각이 비어 있음
+
+### 증상 (2026-10-30, Phase 3-B ⑥ OpenSearch·Loki 비교 중)
+- 같은 구간(12:52~12:57 UTC)의 서비스별 로그 수를 비교했더니 14개 서비스는 같았는데, currency·shipping만 OpenSearch 0건 / Loki 307·127건이었다.
+- OpenSearch의 최신 문서:
+```
+currency  @timestamp = 1970-01-01T00:00:00Z   observedTimestamp = 2026-10-30T12:58:44.72Z
+shipping  @timestamp = 1970-01-01T00:00:00Z   observedTimestamp = 2026-10-30T12:58:44.57Z
+cart      @timestamp = 2026-10-30T12:58:40.09Z observedTimestamp = 2026-10-30T12:58:42.48Z   ← 정상
+```
+- 수신 시각(`observedTimestamp`) 기준으로 다시 세면 currency 308 / Loki 307(구간 경계 차이), shipping 127 / 127. 로그 자체는 빠지지 않았다.
+
+### 원인
+- currency(C++)와 shipping(Rust) SDK가 로그 레코드 시각(`timeUnixNano`)을 0으로 보낸다(OpenSearch 저장값으로 확인). SDK 로그 브리지 내부 동작은 미확인.
+- OpenSearch exporter는 이 값을 그대로 `@timestamp`로 쓰고, Loki는 로그 시각이 0이면 수신 시각을 쓴다.
+
+### 영향
+- 로그 시각으로 정렬·집계하는 도구에서 두 서비스 로그가 1970년으로 밀려 보이지 않는다.
+- 현재 Loki 구성에서는 조회에 문제가 없다. Collector 수신까지 지연이 있으면 그만큼 늦은 시각으로 찍힌다.
+
+### 해결 방향
+- Collector `transform`으로 `time_unix_nano == 0`이면 `observed_time_unix_nano`를 복사할 수 있다.
+- Loki 전환으로 실사용 영향이 없어 **기록만** 한다(#9).
+
+---
+
 ## 검증 방법 (수정 후 재확인)
 ```powershell
-# 서비스별 k8s.pod.name 부착 여부, host.name이 Collector 파드 이름인지, 헬스체크 트레이스 수 집계 (Jaeger API)
-.\scripts\check-resource-attributes.ps1 -JaegerUrl http://<ALB 주소>/jaeger/ui -Lookback 3h
-.\scripts\check-resource-attributes.ps1 -JaegerUrl http://<ALB 주소>/jaeger/ui -Since '2026-10-30 11:11:53'   # 배포 이후만
+# 서비스별 k8s.pod.name 부착 여부, host.name이 Collector 파드 이름인지, 헬스체크 트레이스 수 집계
+# Grafana 데이터소스 프록시로 Tempo를 조회한다 (Phase 3-B ⑤부터. 그 전에는 -JaegerUrl로 Jaeger API를 썼다)
+.\scripts\check-resource-attributes.ps1 -GrafanaUrl http://<ALB 주소>/grafana -Lookback 1h
+.\scripts\check-resource-attributes.ps1 -GrafanaUrl http://<ALB 주소>/grafana -Since '2026-10-30 21:00'   # 이 시각 이후만
 ```
 확인 기준: 모든 서버 서비스에 `k8s.pod.name` 존재, `frontend-web`에는 없음, `host.name`이 Collector 파드 이름이 아님, 헬스체크 트레이스 0건
+
+### Phase 3-B ⑤ 이후 재확인 (2026-10-30, Tempo, 최근 15분)
+- 서버 서비스 17개 모두 `k8s.pod.name` 있음, `frontend-web` 0/50, `host.name`=Collector 0, 헬스체크 0/500. 3-A 결과가 저장소 전환 후에도 유지된다.
 
 ### Phase 3-A ① 전후 비교 (2026-10-30)
 수정 전은 최근 3시간, 수정 후는 배포(11:11:53) 이후 load-generator 3분 실행 구간. 서비스별 최대 50 트레이스.

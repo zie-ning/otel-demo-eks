@@ -1,6 +1,6 @@
 # Phase 3. 관측 데이터 품질 수정과 관측 스택 전환
 
-> 상태: 🔄 진행 중 (2026-10-30 시작, 3-A 완료, 3-B ③④ 완료) · 요약: [PLAN.md](../PLAN.md#phase-3-관측-스택-전환)
+> 상태: ✅ 완료 (2026-10-30) · 요약: [PLAN.md](../PLAN.md#phase-3-관측-스택-전환) · 증거: [evidence/phase3](../evidence/phase3/)
 
 ## 목표
 - **3-A**: Phase 2에서 발견한 관측 데이터 품질 문제를 먼저 고친다.
@@ -122,24 +122,142 @@ kube-prometheus-stack을 고른 이유: 내장 Prometheus도 Alertmanager·kube-
 
 확인만 한 것
 - OpenSearch 데이터소스 상태 점검은 "Index not found: otel-logs-*"지만 실제 PPL 로그 쿼리는 정상
-- Jaeger Monitor 탭은 kps에 span metrics가 있는데도 빈 결과. 원인 미확인, 변경 전 동작 여부도 미확인. ⑤에서 Jaeger 제거
+- ~~Jaeger Monitor 탭은 kps에 span metrics가 있는데도 빈 결과. 원인 미확인, 변경 전 동작 여부도 미확인. ⑤에서 Jaeger 제거~~
+  → ⑤에서 정정: ④에서 Jaeger `extraEnv` 목록을 덮어쓰며 `JAEGER_GRPC_PORT`를 빠뜨려, Jaeger OTLP 수신기가 4317이 아닌 임의 포트로 열리고 Collector 전송이 거부되고 있었다(확인). Monitor 탭이 비었던 것도 이 때문일 가능성이 크다(추정, Jaeger를 제거해 더 확인하지 않음).
 
 남은 결정: kps(kubelet/cAdvisor·node-exporter·kube-state-metrics)와 Collector(kubeletstats·hostmetrics·k8s_cluster) 수집이 겹친다. 데모 Linux 대시보드는 Collector hostmetrics를 쓰므로 당분간 둘 다 유지.
 
-### ⑤ Tempo 도입 (예정)
-- 트레이스 exporter를 Tempo로, 데이터소스 `webstore-traces`를 tempo 타입으로, 내장 Jaeger·`/jaeger` 경로 비활성화
-- 대시보드 "Service Dependency"(Jaeger 전용 dependencyGraph) 패널 대체
-- 집계 스크립트와 CLAUDE.md 분석 원칙을 Tempo 기준으로 변경
-- 차트 저장소 확인 필요 (Grafana 차트 일부가 `grafana-community`로 이전됨)
+### ⑤⑥⑦ 진행 방식
+⑤⑥⑦은 브랜치 하나(`feat/tempo`)와 PR 하나로 묶었다(사용자 결정). 단계마다 ③④와 같은 순서로 진행했다.
+1. 새 저장소를 설치하고 Collector가 **기존 저장소와 병행 전송**
+2. 같은 구간의 데이터를 양쪽에서 비교
+3. 같음을 확인한 뒤 내장 컴포넌트를 끔
 
-### ⑥ Loki 도입 (예정)
-- 단일 바이너리, 파일시스템 저장. 캐시·canary 등 부가 컴포넌트는 끔
-- Collector 로그를 Loki OTLP 입구로, 내장 OpenSearch 비활성화(CPU requests 1000m 해제)
-- 대시보드 로그 패널 2개(OpenSearch PPL)를 LogQL로 재작성
+비교 기준을 만들려고 새 클러스터에 `main` 구성(③④ 상태)을 먼저 배포했다. 관측 스택 → 데모 순서의 새 클러스터 설치가 이때 처음 확인됐다.
 
-### ⑦ 데이터소스 연결 (예정)
-- `span_metrics` 커넥터 exemplar 켜기
-- 메트릭 exemplar → Tempo, Tempo → Loki(trace_id), Loki → Tempo
+### ⑤ Tempo 도입 ✅
+차트 `grafana-community/tempo` 3.2.1 (Tempo 3.1.1), `helm/values/tempo.yaml`
 
-### 3-B 완료 기준
-- [ ] Grafana 하나에서 메트릭 → 트레이스 → 로그로 이동 가능
+**구성**
+| 항목 | 설정 | 근거 |
+|---|---|---|
+| 모드 | 단일 바이너리. Tempo 3.x는 ingester·compactor 대신 live-store·backend worker를 쓰고, 이 모드에서는 Kafka가 필요 없다 | 노드 1대 |
+| 저장 | emptyDir 3Gi(`extraVolumes`로 크기 제한), 보존 12시간 | 차트는 persistence를 끄면 컨테이너 쓰기 계층에 저장해 크기를 제한할 수 없다 |
+| metrics-generator | `service-graphs`만 켜고 kps Prometheus에 remote write(`enableRemoteWriteReceiver`) | Jaeger 의존성 그래프를 대신할 서비스 맵용. span 지표는 Collector `span_metrics`가 이미 만든다 |
+| 자원 | requests 50m / 512Mi, limit 2Gi, `GOMEMLIMIT` 1638MiB(제한의 80%) | 아래 OOM 참고 |
+| Grafana | 데이터소스 uid `webstore-traces`를 Jaeger에서 넘겨받음 | 대시보드·exemplar 링크를 고치지 않아도 된다 |
+
+대시보드: APM 트레이스 패널(Jaeger search → TraceQL `{resource.service.name=… && resource.service.namespace=…}`), 데모 Service Dependency 패널(Jaeger dependencyGraph → Tempo serviceMap)
+
+**병행 전송 비교** (12:11:41~12:16:41 UTC, 서비스 8개 × 최대 30 트레이스, 양방향)
+
+| 방향 | 결과 |
+|---|---|
+| Jaeger에서 찾은 트레이스 → Tempo 조회 | checkout 10/10, frontend 30/30, cart 30/30, payment 10/10, shipping 30/30, ad 30/30, quote 30/30, email 10/10. 스팬 수 모두 같음 |
+| Tempo에서 찾은 트레이스 → Jaeger 조회 | 같은 8개 서비스 모두 존재. 스팬 수 차이 1건 |
+
+- 차이 1건(`cac341ba7a0e572ed627e6fba10bae43`, Tempo 2 / Jaeger 4): payment ↔ flagd의 장기 연결(EventStream)이라 10분 간격의 스팬이 같은 트레이스 ID를 쓴다. Jaeger에만 있는 2개는 12:06 스팬이고, Tempo를 재배포(약 12:11)할 때 파드 교체로 emptyDir가 비워져 사라졌다. 전송 경로 문제가 아니다.
+- 비교 도구: 임시 스크립트(Grafana 데이터소스 프록시로 Tempo, ALB `/jaeger`로 Jaeger 조회). 저장소에는 넣지 않았다.
+
+**진행 중 발견해 수정한 것**
+1. **Jaeger가 ④ 이후 트레이스를 받지 못하고 있었다.** `extraEnv`는 목록이라 values에 적으면 차트 기본 목록을 통째로 바꾸는데, ④에서 `PROMETHEUS_ADDR`만 바꾸려고 목록을 다시 적으며 `JAEGER_GRPC_PORT`를 빠뜨렸다. Jaeger 로그의 OTLP 수신 주소가 `[::]:36087`, Collector 로그는 `jaeger:4317 connection refused`. 비교를 위해 변수를 되살렸고, 이후 Jaeger 자체를 제거했다.
+2. **Grafana 데이터소스가 바뀌지 않았다.** 사이드카 재적용이 500으로 실패, Grafana 로그 `data source with the same uid already exists`. 새 이름(Tempo)이 기존 이름(Jaeger)이 쓰던 uid를 쓰려 해서 충돌했다. Grafana 파드 재시작으로 해결(DB가 emptyDir). 새 클러스터에서는 생기지 않는다. → [operations.md](../operations.md#5-문제-해결)
+3. **Tempo가 OOMKilled.** 메모리 제한 1Gi로 배포하고 12분 만에 종료(exit 137), 재시작 직후 841Mi. 제한 2Gi + `GOMEMLIMIT`로 바꾼 뒤 비교 조회 중 최대 777Mi, 재시작 0회.
+4. 차트 기본 Jaeger 수신기(thrift·gRPC)는 `null`로 지우면 서비스 템플릿이 값을 참조해 렌더링이 실패한다. 클러스터 내부 ClusterIP라 그대로 두었다.
+
+**Jaeger 비활성화**
+- `jaeger.enabled: false`, Collector traces exporter를 `otlp_grpc/tempo`만 남김. 비교용 Jaeger 데이터소스 삭제(역시 Grafana 재시작 필요)
+- 확인: Jaeger 리소스 0개, Collector 오류 0건, `/`·`/grafana` 200, `/jaeger/ui/` 503(차트가 frontend-proxy 경로를 무조건 만들어 남음), APM 트레이스 패널 TraceQL 조회 20행
+
+**집계 스크립트 이전** (`scripts/check-resource-attributes.ps1`)
+- `-JaegerUrl` → `-GrafanaUrl`. Grafana 데이터소스 프록시로 Tempo 검색 API를 익명(Viewer)으로 조회한다.
+- 트레이스 전체를 받지 않고 TraceQL `select(resource.k8s.pod.name, resource.host.name)`으로 필요한 속성만 받는다.
+- 처음 실행 때 `frontend-web`에 파드 이름이 50/50 있는 것으로 나왔다. Tempo는 `select`로 고른 속성이 없으면 키를 빼지 않고 문자열 `"nil"`을 돌려주기 때문이었다(직접 쿼리 `resource.k8s.pod.name != nil`로 0건 확인). 스크립트를 고쳤다.
+- 결과(최근 15분): 서버 서비스 17개 모두 `k8s.pod.name` 있음, `frontend-web` 0/50, `host.name`=Collector 0, 헬스체크 0/500. 3-A 완료 기준과 같다. 헬스체크 쿼리가 실제 헬스체크를 잡아내는지는 확인하지 못했다(현재 헬스체크 트레이스가 없음).
+
+확인만 한 것
+- Tempo 로그 `attributes truncated` (`gen_ai.tool.definitions` 2627바이트 > 2048): 데모 AI 에이전트 스팬의 긴 속성이 잘린다. 분석 대상이 아니라 기록만 한다.
+- Tempo 로그 `no jobs found` 오류: 백엔드 스케줄러가 할 압축 작업이 없을 때 반복된다(추정, 정상 동작).
+- 서비스 그래프 지표의 exemplar는 trace ID 라벨이 `traceID`라, Prometheus 데이터소스의 exemplar 링크(`trace_id` 하나만 설정 가능, kps 템플릿 제한)로 이어지지 않는다. 서비스 맵 자체는 정상(서비스 간 연결 30개).
+
+### ⑥ Loki 도입 ✅
+차트 `grafana-community/loki` 20.2.0 (Loki 3.7.9), `helm/values/loki.yaml`
+
+**구성**
+- Monolithic 모드, 파일시스템 저장, emptyDir 3Gi, 보존 24시간(compactor 삭제), `auth_enabled: false`
+- 끈 것: gateway(nginx), chunks·results 캐시(memcached 기본값이 수 GB를 예약), canary, test, 룰 사이드카. 차트 기본값이 SimpleScalable 컴포넌트(write·read·backend) replicas를 3으로 두어 0으로 꺼야 렌더링 검증을 통과한다.
+- Collector: `otlp_http/loki` → `http://loki.monitoring:3100/otlp`. Loki 3는 OTLP를 직접 받는다.
+- 라벨: Loki 기본 OTLP 설정으로 `service_name`, `service_namespace`, `service_instance_id`, `k8s_*`(파드 이름 포함)가 인덱스 라벨, `trace_id`·`span_id`·`severity_text` 등은 구조화 메타데이터로 저장된다.
+- Grafana: 데이터소스 uid `webstore-logs`를 OpenSearch에서 넘겨받음(이름 충돌로 Grafana 재시작 필요, ⑤와 같은 문제)
+
+**대시보드 로그 패널 4개 변환** (OpenSearch PPL → LogQL)
+| 대시보드 | 패널 | LogQL |
+|---|---|---|
+| Demo | Log Records by Severity (표) | `sum by (severity_text) (count_over_time({service_name="${service}"} [$__range]))` |
+| Demo | Log Records (100 recent entries) (표 → 로그 패널) | `{service_name="${service}"}` |
+| APM | 서비스 로그 | `{service_name="$service_name"} \| service_namespace="$service_namespace"` |
+| Collector | Collector Logs | `{service_name="$service_name"}` |
+
+- 대시보드 JSON에 대소문자만 다른 키가 있어(④ 기록) 일반 JSON 도구로 고치면 키 하나가 사라진다. 키 순서·중복을 보존하는 임시 스크립트로 바꿨다(변경 없이 읽고 쓴 결과가 원본과 바이트 단위로 같음을 먼저 확인).
+- 심각도 표: API 응답(백엔드 프레임)만 보고 `Series to rows` 변환으로 바꿨다가 화면에서 열이 깨져 되돌렸다. `format: table`이면 Grafana 프런트엔드가 라벨을 열로 펼친 표를 만든다. 브라우저에서 cart `Information 353`, frontend-proxy(Envoy 로그는 심각도 없음) `Count 3644` 확인.
+
+**병행 전송 비교** (12:52~12:57 UTC, 서비스별 로그 수)
+- 14개 서비스 완전히 같음 (cart 441, frontend 1039, frontend-proxy 5112, product-catalog 1519, otelcol-contrib 2075 등)
+- currency·shipping은 처음에 OpenSearch 0건(Loki 307·127)으로 나왔다. 두 서비스(C++, Rust)는 로그 시각(`timeUnixNano`)을 비워 보내, OpenSearch가 `@timestamp`를 1970-01-01로 저장했기 때문이다. 수신 시각(`observedTimestamp`) 기준으로 다시 세면 currency 308 / 307(구간 경계), shipping 127 / 127. 데이터 품질 문제로 **OBS-8**(#9) 등록.
+
+**OpenSearch 비활성화**
+- `opensearch.enabled: false`, Collector logs exporter를 `otlp_http/loki`만 남김, 비교용 데이터소스·OpenSearch 플러그인 삭제
+- 확인: OpenSearch 리소스(PVC 포함) 0개, Collector 오류 0건, Loki 최근 1분 로그 2106건, APM 로그 패널 브라우저 확인
+
+**monitoring 노드 자원 (내장 도구 모두 제거 후)**
+| 항목 | ④ 완료 시 | ⑥ 완료 후 |
+|---|---|---|
+| CPU requests | 1400m (72%) | **500m (25%)** |
+| 메모리 requests | — | 2242Mi (31%) |
+| 메모리 limits 합 | — | 6736Mi (94%) |
+| 실사용 메모리 | — | Prometheus 622Mi, Tempo 425Mi, Grafana 279Mi(본체), Loki 96Mi |
+
+- OpenSearch는 실사용 CPU 20m인데 requests 1000m(차트 기본값)로 노드의 절반을 예약하고 있었다. 메모리는 885Mi(Loki 96Mi).
+- 메모리 limits 합 94%: 모든 컴포넌트가 동시에 제한까지 차오르면 노드 메모리가 모자란다. 지금 실사용은 훨씬 낮아 Phase 4에서 다시 본다.
+
+### ⑦ 데이터소스 연결 ✅
+
+| 연결 | 설정 |
+|---|---|
+| 지표 → 트레이스 | Collector `span_metrics` 커넥터 `exemplars.enabled: true` (차트 기본 `{}`는 exemplar 없음). Prometheus 데이터소스의 exemplar 링크(`trace_id` → `webstore-traces`)는 ④에서 설정됨 |
+| 트레이스 → 로그 | Tempo `tracesToLogsV2` 사용자 쿼리 `{service_name=~".+"} \| trace_id="…" \| span_id="…"`. trace_id·span_id가 구조화 메타데이터라 라벨 셀렉터가 아니라 파이프라인 필터로 건다 |
+| 트레이스 → 지표 | Tempo `tracesToMetrics`: 스팬의 `service.name`으로 요청률·에러율·p95 지연(span metrics) |
+| 로그 → 트레이스 | Loki `derivedFields`: `trace_id`(matcherType `label`, 구조화 메타데이터도 찾음)를 "Tempo에서 트레이스 보기" 링크로 |
+
+- 트레이스 → 지표 쿼리를 처음 `rate(…[1m])`로 썼다가 결과가 비었다. span metrics도 1분에 한 번 들어와(5분에 샘플 5개) 1분 구간에 점이 하나뿐이다. `[5m]`으로 바꿨다.
+- 배포 후 span metrics에 exemplar가 붙은 시리즈 191개
+
+**검증** — API로 데이터가 이어지는지 확인한 뒤, 브라우저에서 실제 링크를 따라갔다. Explore는 익명(Viewer)에게 열리지 않아 admin 로그인이 필요하다.
+
+| # | 단계 | 결과 | 증거 |
+|---|---|---|---|
+| 1 | checkout p95 지연 그래프의 exemplar | `PlaceOrder` 52.7ms, trace `c3fccc6522d5114ee2fcf70db254d060`, span `dd422a052efa8178`, "Query with Tempo" | [1-metrics-exemplar.png](../evidence/phase3/1-metrics-exemplar.png) |
+| 2 | Tempo 트레이스 | 해당 스팬이 강조된 트레이스(서비스 11개, 스팬 155개) | [2-exemplar-to-tempo-trace.png](../evidence/phase3/2-exemplar-to-tempo-trace.png) |
+| 3 | 스팬 Links 메뉴 | Related logs, 요청률·에러율·p95 지연 | [3-span-links-logs-metrics.png](../evidence/phase3/3-span-links-logs-metrics.png) |
+| 4 | 트레이스 → 로그 | 이 스팬의 로그 3줄: `[PlaceOrder]`, `payment went through`, `order placed` | [4-trace-to-loki-logs.png](../evidence/phase3/4-trace-to-loki-logs.png) |
+| 5 | 로그 → 트레이스 | 같은 trace_id 로그 56줄(checkout·payment·shipping·currency·product-catalog·cart·email 등), 로그 상세의 TraceID 링크 | [5-loki-log-traceid-link.png](../evidence/phase3/5-loki-log-traceid-link.png) |
+| 6 | 다시 Tempo | 같은 트레이스로 복귀 | [6-loki-to-tempo-trace.png](../evidence/phase3/6-loki-to-tempo-trace.png) |
+
+API 확인(같은 날): exemplar trace_id 2/2 Tempo 조회, trace_id가 있는 로그 2/2 Tempo 조회, 트레이스 `27434703…` 스팬 139개 중 45개에서 Grafana가 만드는 쿼리로 로그 조회(나머지는 로그를 남기지 않는 스팬)
+
+### 3-B 완료 기준 ✅
+- [x] Grafana 하나에서 메트릭 → 트레이스 → 로그로 이동 가능 (위 1~6)
+
+---
+
+## 남은 일 (Phase 4 이후)
+- kps와 Collector의 인프라 지표 중복 수집 정리 ([PLAN 미결정 사항](../PLAN.md#6-아직-정하지-않은-사항))
+- monitoring 노드 메모리 limits 합 94%: Phase 4에서 알림 규칙을 더하기 전에 실사용 기준으로 조정
+- OBS-7(#6), OBS-8(#9): 앱 설정·코드 영역이라 기록만
+- 서비스 그래프 지표 exemplar 연결(`traceID` 라벨): 필요해지면 Grafana 데이터소스를 직접 정의하는 방식 검토
+- 시연할 때 Explore 링크는 admin 로그인 상태에서만 동작한다
+
+## 관련 PR·이슈
+- 3-A: PR #5, #7 / 이슈 #1 #2 #3 #4, #6(OBS-7), #9(OBS-8, ⑥에서 발견)
+- ③④: PR #8
+- ⑤⑥⑦: 이 문서 갱신과 함께 올리는 PR (브랜치 `feat/tempo`)

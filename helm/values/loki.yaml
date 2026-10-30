@@ -1,0 +1,105 @@
+# Loki 차트 values (grafana-community/loki, 차트 버전은 scripts/deploy-observability.ps1에서 고정)
+# Phase 3-B ⑥: 데모 차트 내장 OpenSearch를 대신하는 로그 저장소.
+# 단일 바이너리(Monolithic) 모드, 로컬 파일시스템 저장. 오브젝트 스토리지(S3)는 쓰지 않는다
+# (클러스터를 작업할 때만 띄우고 데이터를 남기지 않으므로 Tempo·Prometheus와 같은 결정).
+
+deploymentMode: Monolithic
+
+# 서비스 이름을 loki로 고정 (Collector exporter, Grafana 데이터소스가 loki.monitoring으로 찾는다)
+fullnameOverride: loki
+
+loki:
+  # 테넌트 구분 없이 하나로 쓴다 (켜면 모든 요청에 X-Scope-OrgID 헤더가 필요)
+  auth_enabled: false
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  schemaConfig:
+    configs:
+      - from: "2026-10-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+  # 차트 기본값 위에 병합된다
+  limits_config:
+    # 클러스터를 작업할 때만 띄우므로 짧게 (compactor가 지운다)
+    retention_period: 24h
+    # OTLP 로그의 trace_id·span_id 같은 속성은 라벨이 아니라 구조화 메타데이터로 저장된다 (Loki 3 기본값, 명시만 함)
+    allow_structured_metadata: true
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+  ingester:
+    chunk_encoding: snappy
+  querier:
+    # 차트 예시(monolithic-values.yaml)와 같이 작은 노드에 맞춰 동시 쿼리 수를 줄인다
+    max_concurrent: 2
+  # 사용 통계를 Grafana Labs로 보내지 않는다
+  analytics:
+    reporting_enabled: false
+
+singleBinary:
+  replicas: 1
+  # 관측 도구는 monitoring 노드그룹 전용 taint를 견디고 그 노드로만 간다 (otel-demo.yaml과 같은 규칙)
+  nodeSelector:
+    role: monitoring
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: monitoring
+      effect: NoSchedule
+  # 작게 잡았다. 실측(⑥, 데모 트래픽): 메모리 96Mi, CPU 12m (내장 OpenSearch는 885Mi)
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+  # Go 런타임이 컨테이너 제한(1Gi)에 닿기 전에 GC로 회수하도록 제한의 80% (Tempo와 같은 방식)
+  extraEnv:
+    - name: GOMEMLIMIT
+      value: 819MiB
+  # 데이터는 emptyDir에 두고 노드 디스크를 아끼도록 크기를 제한한다
+  persistence:
+    enabled: false
+    dataVolumeParameters:
+      emptyDir:
+        sizeLimit: 3Gi
+
+# 차트 기본값이 SimpleScalable 컴포넌트 replicas를 3으로 두어, Monolithic에서는 0으로 꺼야 렌더링 검증을 통과한다
+write:
+  replicas: 0
+read:
+  replicas: 0
+backend:
+  replicas: 0
+
+# Grafana·Collector가 loki:3100으로 바로 붙는다. 인증·라우팅용 게이트웨이(nginx)는 필요 없다
+gateway:
+  enabled: false
+
+# 캐시(memcached)는 기본값이 수 GB 메모리를 예약해 monitoring 노드에 맞지 않는다. 단일 인스턴스 소량 로그라 끈다
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+
+# 로그 기반 알림 규칙(ruler)을 ConfigMap에서 읽어 오는 사이드카. 알림은 Prometheus·Grafana에서 하므로 쓰지 않는다
+sidecar:
+  rules:
+    enabled: false
+
+# 동작 확인용 부가 컴포넌트는 쓰지 않는다
+lokiCanary:
+  enabled: false
+test:
+  enabled: false
+
+# kube-prometheus-stack Prometheus가 Loki 자체 메트릭을 수집한다
+monitoring:
+  serviceMonitor:
+    enabled: true

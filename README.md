@@ -25,13 +25,15 @@
 │   └── observability-findings.md  # 텔레메트리 데이터 품질 문제 기록
 ├── helm/grafana/           # 데모 대시보드·알림 규칙 (kustomize ConfigMap)
 ├── helm/values/
-│   ├── otel-demo.yaml      # 데모 차트 values (노드 배치, ALB Ingress, Collector 설정)
-│   └── kube-prometheus-stack.yaml  # Prometheus·Alertmanager·node-exporter·kube-state-metrics
+│   ├── otel-demo.yaml      # 데모 차트 values (노드 배치, ALB Ingress, Collector 설정. 내장 관측 도구는 끔)
+│   ├── kube-prometheus-stack.yaml  # Prometheus·Alertmanager·Grafana(데이터소스 연결)·node-exporter·kube-state-metrics
+│   ├── tempo.yaml          # 트레이스 저장소 (서비스 그래프 지표 생성)
+│   └── loki.yaml           # 로그 저장소 (OTLP 직접 수신)
 ├── scripts/
 │   ├── up.ps1              # 클러스터 + 애드온 생성
-│   ├── deploy-observability.ps1  # 관측 스택(kube-prometheus-stack) 설치/업그레이드
+│   ├── deploy-observability.ps1  # 관측 스택(kube-prometheus-stack, Tempo, Loki) 설치/업그레이드
 │   ├── deploy-demo.ps1     # OpenTelemetry Demo 설치/업그레이드
-│   ├── check-resource-attributes.ps1  # 서비스별 리소스 속성 품질 집계 (Jaeger API)
+│   ├── check-resource-attributes.ps1  # 서비스별 리소스 속성 품질 집계 (Tempo API)
 │   └── down.ps1            # ALB 정리 후 전체 삭제
 └── terraform/
     ├── 00-bootstrap/       # Terraform state용 S3 버킷, AWS Budgets 알림 (영구)
@@ -44,7 +46,7 @@
 - [x] Phase 0. 사전 준비 (도구, 자격 증명, state 버킷, 예산 알림)
 - [x] Phase 1. 인프라 (VPC, EKS, 노드그룹 app/monitoring, LB Controller, metrics-server)
 - [x] Phase 2. 데모 배포 (Helm, ALB 외부 접속, 화면 동작별 트레이스 관찰, 관측 데이터 품질 문제 OBS-1~5 기록)
-- [ ] Phase 3. 관측 스택 전환 (3-A 관측 데이터 품질 수정 완료, 3-B ③④ kube-prometheus-stack·Grafana 일원화 완료, ⑤~⑦ 진행 예정)
+- [x] Phase 3. 관측 데이터 품질 수정(OBS-1~3, 6), 관측 스택 전환(kube-prometheus-stack·Tempo·Loki), Grafana에서 지표 → 트레이스 → 로그 연결
 - [ ] Phase 4. SLO와 알림
 - [ ] Phase 5. 장애 주입 시나리오
 - [ ] Phase 6. 문서화

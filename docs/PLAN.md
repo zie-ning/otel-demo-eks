@@ -1,6 +1,6 @@
 # OpenTelemetry Demo on AWS EKS — 프로젝트 계획
 
-> 작성일: 2026-10-29 · 진행 상황 갱신: 2026-10-30 (Phase 3 진행 중: 3-A, 3-B ③④ 완료)
+> 작성일: 2026-10-29 · 진행 상황 갱신: 2026-10-30 (Phase 3 완료)
 > 목적: 포트폴리오용. OpenTelemetry Demo를 AWS EKS에 배포하고, 오픈소스 관측 스택으로 모니터링·알림을 구성한 뒤 장애 주입 시나리오를 수행해 **탐지 → 분석 → 원인 규명 → 재발 방지** 과정을 문서로 남긴다.
 
 ---
@@ -29,13 +29,13 @@
 
 | 신호 | 차트 기본 | 변경 후 |
 |---|---|---|
-| 메트릭 | Prometheus (차트 내장) | **kube-prometheus-stack**의 Prometheus (OTLP 수신 활성화) + Alertmanager + node-exporter + kube-state-metrics |
-| 트레이스 | Jaeger (all-in-one, 메모리 저장) | **Tempo** |
-| 로그 | OpenSearch | **Loki** |
-| 대시보드 | Grafana (차트 내장) | **kube-prometheus-stack**의 Grafana (데모 대시보드는 ConfigMap sidecar로 이전) |
-| 수집 | OTel Collector | 유지. exporter 대상만 변경 |
+| 메트릭 | Prometheus (차트 내장) | **kube-prometheus-stack**의 Prometheus (OTLP 수신 활성화) + Alertmanager + node-exporter + kube-state-metrics ✅ |
+| 트레이스 | Jaeger (all-in-one, 메모리 저장) | **Tempo** (단일 바이너리, metrics-generator 서비스 그래프) ✅ |
+| 로그 | OpenSearch | **Loki** (단일 바이너리, OTLP 직접 수신) ✅ |
+| 대시보드 | Grafana (차트 내장) | **kube-prometheus-stack**의 Grafana (데모 대시보드는 ConfigMap sidecar로 이전) ✅ |
+| 수집 | OTel Collector | 유지. exporter 대상만 변경 ✅ |
 
-중복 컴포넌트(차트 내장 Prometheus·Grafana·Jaeger·OpenSearch)는 비활성화해서 노드 자원을 아낀다.
+중복 컴포넌트(차트 내장 Prometheus·Grafana·Jaeger·OpenSearch)는 비활성화해서 노드 자원을 아낀다. 관측 도구는 모두 `monitoring` 네임스페이스에 emptyDir 저장으로 둔다.
 
 ### 2.2 데이터 흐름
 
@@ -109,7 +109,7 @@ Phase별 목표·상태·핵심 결과만 적는다. 진행 과정, 수치, 문�
 | 0 | 사전 준비 | ✅ 2026-10-29 | [phase-0-preparation.md](phases/phase-0-preparation.md) |
 | 1 | 인프라 (Terraform) | ✅ 2026-10-29 | [phase-1-infrastructure.md](phases/phase-1-infrastructure.md) |
 | 2 | 데모 배포와 트레이스 관찰 | ✅ 2026-10-30 | [phase-2-demo-deploy.md](phases/phase-2-demo-deploy.md) |
-| 3 | 관측 데이터 품질 수정, 관측 스택 전환 | 🔄 진행 중 | [phase-3-observability-stack.md](phases/phase-3-observability-stack.md) |
+| 3 | 관측 데이터 품질 수정, 관측 스택 전환 | ✅ 2026-10-30 | [phase-3-observability-stack.md](phases/phase-3-observability-stack.md) |
 | 4 | SLO와 알림 | 예정 | |
 | 5 | 장애 주입 시나리오 | 예정 | |
 | 6 | 문서화 | 예정 | |
@@ -135,20 +135,20 @@ Phase별 목표·상태·핵심 결과만 적는다. 진행 과정, 수치, 문�
 - **완료 기준**: ALB로 쇼핑몰 접속 ✅, load-generator 트래픽 ✅, Jaeger에서 트레이스 확인 ✅
 
 ### Phase 3. 관측 스택 전환
-🔄 진행 중 · [상세](phases/phase-3-observability-stack.md)
+✅ 완료 (2026-10-30) · [상세](phases/phase-3-observability-stack.md)
 
 **3-A. 관측 데이터 품질 수정** ✅
 - [x] ① Collector 리소스 속성 수정: OBS-1, OBS-3, OBS-6 (PR #5)
 - [x] ② 파드 메타데이터: OBS-2 (PR #7). OBS-7은 기록만
 - **완료 기준**: 모든 서버 서비스에 `k8s.pod.name`, `frontend-web`에는 없음, `host.name`이 Collector 파드 이름 아님 ✅
 
-**3-B. 관측 스택 전환** (한 단계씩 바꾸고 매번 검증)
+**3-B. 관측 스택 전환** (한 단계씩 바꾸고 매번 검증) ✅
 - [x] ③ kube-prometheus-stack 설치, 내장 Prometheus와 병행 전송해 동일성 확인
-- [x] ④ Grafana 일원화: kps Grafana로 대시보드·알림 이전, 내장 Prometheus·Grafana 비활성화
-- [ ] ⑤ Tempo 도입 → 내장 Jaeger 비활성화
-- [ ] ⑥ Loki 도입 → 내장 OpenSearch 비활성화
-- [ ] ⑦ Grafana 데이터소스 연결: exemplar → 트레이스, 트레이스 → 로그
-- **완료 기준**: Grafana 하나에서 메트릭 → 트레이스 → 로그로 이동 가능
+- [x] ④ Grafana 일원화: kps Grafana로 대시보드·알림 이전, 내장 Prometheus·Grafana 비활성화 (PR #8)
+- [x] ⑤ Tempo 도입: Jaeger와 병행 전송 비교 후 내장 Jaeger 비활성화
+- [x] ⑥ Loki 도입: OpenSearch와 병행 전송 비교 후 내장 OpenSearch 비활성화. OBS-8은 기록만
+- [x] ⑦ 데이터소스 연결: exemplar → 트레이스 → 로그 → 트레이스
+- **완료 기준**: Grafana 하나에서 메트릭 → 트레이스 → 로그로 이동 가능 ✅ ([증거](evidence/phase3/))
 
 ### Phase 4. SLO와 알림
 - [ ] SLO 정의 (예: checkout 성공률, frontend p95 지연)
@@ -184,7 +184,8 @@ Phase별 목표·상태·핵심 결과만 적는다. 진행 과정, 수치, 문�
 |---|---|---|
 | 알림 채널 | Slack / Discord / 이메일 | Phase 4 |
 | 장애 주입 도구 | flagd만 / Chaos Mesh 추가 | Phase 5 |
-| kps와 Collector의 인프라 지표 중복 수집 | 한쪽으로 정리 / 둘 다 유지 | Phase 3 ⑦ 이후 |
+| kps와 Collector의 인프라 지표 중복 수집 | 한쪽으로 정리 / 둘 다 유지 | Phase 4 (알림 규칙이 어느 쪽 지표를 쓸지 정할 때) |
+| monitoring 노드 메모리 limits 합 94% | 실사용 기준으로 limits 조정 / 그대로 | Phase 4 |
 | GitOps(Argo CD) 전환 | 선택 과제 | Phase 6 이후 |
 
 정해진 사항: Terraform state는 **S3** (Phase 0), 저장소는 **GitHub 공개** (Phase 0), 노드는 m7i-flex.large × 3 유지 (근거 수치는 [Phase 3 상세](phases/phase-3-observability-stack.md))
@@ -197,7 +198,7 @@ Phase별 목표·상태·핵심 결과만 적는다. 진행 과정, 수치, 문�
 │   ├── 01-cluster/        # ✅ VPC, EKS, 노드그룹
 │   └── 02-addons/         # ✅ Load Balancer Controller, metrics-server
 ├── helm/
-│   ├── values/            # ✅ otel-demo, kube-prometheus-stack / 예정: tempo, loki
+│   ├── values/            # ✅ otel-demo, kube-prometheus-stack, tempo, loki
 │   └── grafana/           # ✅ 데모 대시보드·알림 (kustomize ConfigMap)
 ├── observability/alerts/  # 예정: PrometheusRule (SLO, burn-rate)
 ├── scenarios/             # 예정: 시나리오별 실행 절차와 포스트모템

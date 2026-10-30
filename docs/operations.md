@@ -49,18 +49,19 @@
 
 ### 관측 스택 배포 (데모보다 먼저)
 ```powershell
-.\scripts\deploy-observability.ps1            # monitoring 네임스페이스에 kube-prometheus-stack 설치/업그레이드
+.\scripts\deploy-observability.ps1            # monitoring 네임스페이스에 kube-prometheus-stack, Tempo, Loki 설치/업그레이드
 .\scripts\deploy-observability.ps1 -Template  # 렌더링 결과만 확인
 ```
-- values: `helm/values/kube-prometheus-stack.yaml`, 데모 대시보드·알림: `helm/grafana/` (kustomize, server-side apply)
-- Collector가 이 스택의 Prometheus(`kps-prometheus.monitoring:9090`)로 메트릭을 보내므로 데모보다 먼저 설치한다. 순서가 바뀌어도 데모는 동작하지만, 설치 전까지 Collector 로그에 전송 실패가 쌓인다.
-- 저장소는 emptyDir라 Prometheus·Grafana 파드가 재시작되거나 클러스터를 지우면 메트릭과 Grafana에서 직접 고친 내용이 사라진다. 대시보드 수정은 `helm/grafana/`에 반영하고, 증거는 삭제 전에 저장한다.
-- Grafana: `http://<ALB 주소>/grafana/`. 대시보드 폴더는 **OpenTelemetry Demo**(데모 앱)와 **Kubernetes**(클러스터·노드). 익명은 읽기 전용, 편집은 `admin` 로그인. 비밀번호는 스크립트가 처음 설치할 때 무작위로 만든다(Git에 없음).
+- values: `helm/values/kube-prometheus-stack.yaml`, `tempo.yaml`, `loki.yaml`. 데모 대시보드·알림: `helm/grafana/` (kustomize, server-side apply)
+- Collector가 이 스택으로 보낸다: 메트릭 → Prometheus(`kps-prometheus.monitoring:9090`), 트레이스 → Tempo(`tempo.monitoring:4317`), 로그 → Loki(`loki.monitoring:3100/otlp`). 그래서 데모보다 먼저 설치한다. 순서가 바뀌어도 데모는 동작하지만, 설치 전까지 Collector 로그에 전송 실패가 쌓인다.
+- 저장소는 모두 emptyDir라 파드가 재시작·교체되거나 클러스터를 지우면 데이터와 Grafana에서 직접 고친 내용이 사라진다(Tempo·Loki는 재배포로 파드가 교체될 때도 사라짐). 대시보드 수정은 `helm/grafana/`에 반영하고, 증거는 삭제 전에 저장한다.
+- Grafana: `http://<ALB 주소>/grafana/`. 대시보드 폴더는 **OpenTelemetry Demo**(데모 앱)와 **Kubernetes**(클러스터·노드). 익명은 대시보드 읽기만 가능하고, **Explore(트레이스·로그 조회, 지표 → 트레이스 → 로그 링크 이동)는 `admin` 로그인이 필요**하다. 비밀번호는 스크립트가 처음 설치할 때 무작위로 만든다(Git에 없음).
   ```powershell
   $s = kubectl get secret grafana-admin -n monitoring -o json | ConvertFrom-Json
   [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s.data.'admin-password'))
   ```
-- Prometheus·Alertmanager UI는 외부에 노출하지 않는다. 필요하면 `kubectl port-forward -n monitoring svc/kps-prometheus 9090`
+- Prometheus·Alertmanager·Tempo·Loki는 외부에 노출하지 않는다. Grafana 데이터소스로 조회하고, API가 필요하면 `kubectl port-forward -n monitoring svc/kps-prometheus 9090`(Tempo `svc/tempo 3200`, Loki `svc/loki 3100`)
+- Grafana 데이터소스 uid: `webstore-metrics`(Prometheus), `webstore-traces`(Tempo), `webstore-logs`(Loki). 데모 대시보드가 이 uid를 참조하므로 바꾸지 않는다.
 
 ### 데모 배포
 ```powershell
@@ -69,7 +70,7 @@
 ```
 - values: `helm/values/otel-demo.yaml` (커밋), ALB 허용 IP는 실행 시 `helm/values/otel-demo.local.yaml`로 생성 (커밋 안 함)
 - 접속 주소: `kubectl get ingress -n otel-demo`의 ADDRESS. ALB는 생성 후 2~3분 뒤부터 응답한다
-- 경로: `/`(쇼핑몰), `/jaeger/ui/`, `/grafana/`(kube-prometheus-stack의 Grafana), `/feature/`(장애 플래그), `/loadgen/`(Locust)
+- 경로: `/`(쇼핑몰), `/grafana/`(kube-prometheus-stack의 Grafana), `/feature/`(장애 플래그), `/loadgen/`(Locust). `/jaeger/ui/`는 차트가 경로를 남기지만 내장 Jaeger를 꺼서 503이다(트레이스는 Grafana에서 Tempo로 본다)
 
 ### 작업 종료
 ```powershell
@@ -225,6 +226,21 @@ helm uninstall otel-demo -n otel-demo --wait
 - 원인: Grafana는 한 번 프로비저닝한 데이터소스를 내부 DB에 남긴다. 설정에서 빼도 자동으로 지우지 않는다.
 - 해결: 이 클러스터의 Grafana DB는 emptyDir라 `kubectl rollout restart deploy/kube-prometheus-stack-grafana -n monitoring`으로 새로 시작하면 정리된다.
 
+### Grafana 데이터소스를 바꿨는데 반영되지 않는다 (같은 uid, 다른 이름)
+- 증상: 데이터소스 사이드카 로그에 `provisioning/datasources/reload` 500, Grafana 로그에 `Failed to provision data sources ... data source with the same uid already exists`. 예전 데이터소스가 그대로 남는다.
+- 원인: 프로비저닝은 데이터소스를 **이름**으로 찾는다. 새 이름(예: Tempo)이 DB에 남은 예전 데이터소스(Jaeger)의 uid(`webstore-traces`)를 쓰려 해서 충돌한다. uid를 유지한 채 저장소를 바꿀 때 생긴다(Phase 3-B ⑤ Jaeger → Tempo, ⑥ OpenSearch → Loki).
+- 해결: 위와 같이 Grafana를 재시작한다. 새 클러스터에서는 DB가 비어 있어 생기지 않는다.
+
+### Tempo가 OOMKilled로 재시작된다
+- 증상: `tempo-0` 재시작, `lastState.terminated.reason: OOMKilled`(exit 137). 그 순간 조회한 트레이스가 없는 것처럼 보인다.
+- 원인: live-store가 최근 트레이스를 메모리에 들고 있어 데모 트래픽에서도 수백 MiB를 쓰고, 여러 트레이스를 한꺼번에 조회하면 더 늘어난다. 1Gi 제한에서 12분 만에 종료됐다(재시작 직후 841Mi).
+- 해결: `helm/values/tempo.yaml`의 메모리 제한 2Gi, `GOMEMLIMIT`를 제한의 80%(1638MiB)로 설정. 이후 조회 중 최대 777Mi, 재시작 0회. emptyDir라 OOM 재시작(같은 파드)에서는 WAL로 복구되지만 재배포(파드 교체)에서는 데이터가 사라진다.
+
+### Helm values에서 목록 하나를 고쳤더니 다른 설정이 사라졌다
+- 증상: Phase 3-B ④에서 Jaeger `extraEnv`의 `PROMETHEUS_ADDR`만 바꾸려고 목록을 다시 적었는데, 빠뜨린 `JAEGER_GRPC_PORT` 때문에 Jaeger가 OTLP를 임의 포트로 열어 Collector 전송이 거부됐다(⑤에서 발견).
+- 원인: Helm은 맵(map)은 병합하지만 **목록(list)은 병합하지 않고 통째로 바꾼다.** `extraEnv`, Collector `processors`·`exporters` 목록이 모두 해당한다.
+- 해결: 목록을 덮어쓸 때는 `helm show values <차트> --version <버전>`으로 기본 목록을 확인해 전부 옮겨 적는다. `-Template`으로 렌더링 결과를 비교한다. 맵에서 키를 지우려고 `null`을 쓰면 렌더링 결과에 `null`이 그대로 남거나(Collector exporter) 템플릿이 실패하는(Tempo 수신기) 경우가 있어 렌더링으로 확인한다.
+
 ---
 
 ## 6. 버전 관리 정책
@@ -240,6 +256,8 @@ helm uninstall otel-demo -n otel-demo --wait
 | Load Balancer Controller 차트 | `02-addons/variables.tf` | `3.6.2` |
 | OpenTelemetry Demo 차트 | `scripts/deploy-demo.ps1` | `0.42.6` |
 | kube-prometheus-stack 차트 | `scripts/deploy-observability.ps1` | `92.16.0` |
+| Tempo 차트 (`grafana-community/tempo`) | `scripts/deploy-observability.ps1` | `3.2.1` (Tempo 3.1.1) |
+| Loki 차트 (`grafana-community/loki`) | `scripts/deploy-observability.ps1` | `20.2.0` (Loki 3.7.9) |
 | 로컬 kubectl | winget 설치본 (PowerShell 프로필 별칭) | 클러스터와 ±1 마이너 이내 유지 |
 
 **업그레이드 절차**

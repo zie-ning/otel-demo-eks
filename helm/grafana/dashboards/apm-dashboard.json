@@ -21,7 +21,7 @@
       }
     ]
   },
-  "description": "APM dashboard for monitoring OpenTelemetry-based services.  \n\nInstrument your applications using OpenTelemetry SDKs and send traces, metrics, and logs to Jaeger for traces, a Prometheus-compatible database for metrics, and OpenSearch for logs. This dashboard provides a centralized view of your application's health and performance. ",
+  "description": "APM dashboard for monitoring OpenTelemetry-based services.  \n\nInstrument your applications using OpenTelemetry SDKs and send traces, metrics, and logs to Tempo for traces, a Prometheus-compatible database for metrics, and Loki for logs. This dashboard provides a centralized view of your application's health and performance. ",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -1826,79 +1826,13 @@
     },
     {
       "datasource": {
-        "type": "grafana-opensearch-datasource",
-        "uid": "${opensearch_datasource}"
+        "type": "loki",
+        "uid": "${logs_datasource}"
       },
       "description": "Logs of the service, filtered by `service.name`, `service.namespace`, and `deployment.environment.name`.\n\nTo explore the logs, open the menu clicking on the icon `⋮` of this panel and click on `Explore`.",
       "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "footer": {
-              "reducers": []
-            },
-            "inspect": false
-          },
-          "mappings": [],
-          "noValue": "No application logs",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "@timestamp"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 226
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "severity.text"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 136
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "instrumentationScope.name"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 246
-              }
-            ]
-          }
-        ]
+        "defaults": {},
+        "overrides": []
       },
       "gridPos": {
         "h": 15,
@@ -1908,75 +1842,29 @@
       },
       "id": 26,
       "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "sortBy": []
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
       },
       "pluginVersion": "12.2.0",
       "targets": [
         {
-          "alias": "",
-          "bucketAggs": [
-            {
-              "field": "observedTimestamp",
-              "id": "2",
-              "settings": {
-                "interval": "auto"
-              },
-              "type": "date_histogram"
-            }
-          ],
           "datasource": {
-            "type": "grafana-opensearch-datasource",
-            "uid": "${opensearch_datasource}"
+            "type": "loki",
+            "uid": "${logs_datasource}"
           },
-          "format": "table",
-          "hide": false,
-          "luceneQueryType": "Logs",
-          "metrics": [
-            {
-              "id": "1",
-              "type": "logs"
-            }
-          ],
-          "query": "search source=otel-logs-* | where resource.service.name=\"$service_name\" and resource.service.namespace=\"$service_namespace\" | fields @timestamp, severity.text, body, instrumentationScope.name\n",
-          "queryType": "PPL",
-          "refId": "B",
-          "timeField": "observedTimestamp"
+          "editorMode": "code",
+          "expr": "{service_name=\"$service_name\"} | service_namespace=\"$service_namespace\"",
+          "maxLines": 1000,
+          "queryType": "range",
+          "refId": "A"
         }
       ],
       "title": "",
-      "transformations": [
-        {
-          "id": "formatTime",
-          "options": {
-            "outputFormat": "YYYY-MM-DD HH:MM:ss.sss",
-            "timeField": "@timestamp",
-            "timezone": "browser",
-            "useTimezone": true
-          }
-        },
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {},
-            "includeByName": {},
-            "indexByName": {
-              "@timestamp": 0,
-              "body": 3,
-              "instrumentationScope.name": 2,
-              "severity.text": 1
-            },
-            "renameByName": {
-              "@timestamp": "Time",
-              "body": "Message",
-              "instrumentationScope.name": "Logger",
-              "severity.text": "Severity"
-            }
-          }
-        }
-      ],
-      "type": "table"
+      "type": "logs"
     },
     {
       "collapsed": false,
@@ -1993,8 +1881,8 @@
     },
     {
       "datasource": {
-        "type": "jaeger",
-        "uid": "${jaeger_datasource}"
+        "type": "tempo",
+        "uid": "${traces_datasource}"
       },
       "description": "Traces containing a span emitted by the service",
       "fieldConfig": {
@@ -2107,13 +1995,14 @@
       "targets": [
         {
           "datasource": {
-            "type": "jaeger",
-            "uid": "${jaeger_datasource}"
+            "type": "tempo",
+            "uid": "${traces_datasource}"
           },
-          "queryType": "search",
+          "limit": 20,
+          "query": "{resource.service.name=\"$service_name\" && resource.service.namespace=\"$service_namespace\"}",
+          "queryType": "traceql",
           "refId": "A",
-          "service": "$service_name",
-          "tags": "service.namespace=\"$service_namespace\""
+          "tableType": "traces"
         }
       ],
       "title": "",
@@ -2144,14 +2033,14 @@
       {
         "allowCustomValue": false,
         "current": {
-          "text": "Jaeger",
+          "text": "Tempo",
           "value": "webstore-traces"
         },
         "description": "OpenTelemetry traces",
         "label": "Traces",
-        "name": "jaeger_datasource",
+        "name": "traces_datasource",
         "options": [],
-        "query": "jaeger",
+        "query": "tempo",
         "refresh": 1,
         "regex": "",
         "type": "datasource"
@@ -2159,14 +2048,14 @@
       {
         "allowCustomValue": false,
         "current": {
-          "text": "OpenSearch",
+          "text": "Loki",
           "value": "webstore-logs"
         },
         "description": "OpenTelemetry logs.",
         "label": "Logs",
-        "name": "opensearch_datasource",
+        "name": "logs_datasource",
         "options": [],
-        "query": "grafana-opensearch-datasource",
+        "query": "loki",
         "refresh": 1,
         "regex": "",
         "type": "datasource"
@@ -2261,7 +2150,7 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "APM Dashboard (Jaeger, Prometheus, OpenSearch)",
+  "title": "APM Dashboard (Tempo, Prometheus, Loki)",
   "uid": "febljk0a32qyoa",
   "version": 1
 }
