@@ -2,7 +2,7 @@
 
 [OpenTelemetry Demo](https://github.com/open-telemetry/opentelemetry-demo)를 AWS EKS에 배포하고, 오픈소스 관측 스택(Prometheus·Grafana·Tempo·Loki)으로 모니터링과 알림을 구성한 뒤, 장애 주입 시나리오로 **탐지 → 분석 → 원인 규명 → 재발 방지** 과정을 기록하는 프로젝트입니다.
 
-> 진행 중인 프로젝트입니다. 전체 계획과 의사결정 근거는 [PLAN.md](PLAN.md), 클러스터 운영 절차는 [docs/operations.md](docs/operations.md)를 참고하세요.
+> 진행 중인 프로젝트입니다. 전체 계획과 의사결정 근거는 [docs/PLAN.md](docs/PLAN.md), 클러스터 운영 절차는 [docs/operations.md](docs/operations.md)를 참고하세요.
 
 ## 기술 스택
 
@@ -17,12 +17,15 @@
 
 ```
 .
-├── PLAN.md                 # 프로젝트 계획과 의사결정 기록
 ├── docs/
+│   ├── PLAN.md             # 프로젝트 계획, 의사결정 기록, 진행 상황
 │   ├── operations.md       # 인프라 운영 지침 (켜고 끄기, 규칙, 비용, 문제 해결)
 │   └── observability-findings.md  # 텔레메트리 데이터 품질 문제 기록
+├── helm/values/
+│   └── otel-demo.yaml      # 데모 차트 values (노드 배치, ALB Ingress)
 ├── scripts/
 │   ├── up.ps1              # 클러스터 + 애드온 생성
+│   ├── deploy-demo.ps1     # OpenTelemetry Demo 설치/업그레이드
 │   └── down.ps1            # ALB 정리 후 전체 삭제
 └── terraform/
     ├── 00-bootstrap/       # Terraform state용 S3 버킷, AWS Budgets 알림 (영구)
@@ -33,8 +36,8 @@
 ## 진행 상황
 
 - [x] Phase 0. 사전 준비 (도구, 자격 증명, state 버킷, 예산 알림)
-- [ ] Phase 1. 인프라 (VPC, EKS)
-- [ ] Phase 2. 데모 배포
+- [x] Phase 1. 인프라 (VPC, EKS, 노드그룹 app/monitoring, LB Controller, metrics-server)
+- [x] Phase 2. 데모 배포 (Helm, ALB 외부 접속, Jaeger 트레이스 확인)
 - [ ] Phase 3. 관측 스택 전환
 - [ ] Phase 4. SLO와 알림
 - [ ] Phase 5. 장애 주입 시나리오

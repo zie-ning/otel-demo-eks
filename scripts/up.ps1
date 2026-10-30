@@ -4,7 +4,8 @@
 param([switch]$AutoApprove)
 
 . "$PSScriptRoot\common.ps1"
-$approve = if ($AutoApprove) { @('-auto-approve') } else { @() }
+# if 식의 결과를 바로 받으면 요소 1개짜리 배열이 문자열로 풀려, @approve 펼칠 때 글자 단위로 쪼개진다
+$approve = @(if ($AutoApprove) { '-auto-approve' })
 
 # 공인 IP가 바뀌어도 API 엔드포인트에 접근할 수 있도록 매번 현재 IP로 갱신한다.
 # *.auto.tfvars는 terraform.tfvars보다 나중에 읽혀 값을 덮어쓴다 (.gitignore 대상)

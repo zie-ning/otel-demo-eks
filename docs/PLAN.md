@@ -1,6 +1,6 @@
 # OpenTelemetry Demo on AWS EKS — 프로젝트 계획
 
-> 작성일: 2026-10-29
+> 작성일: 2026-10-29 · 진행 상황 갱신: 2026-10-30
 > 목적: 포트폴리오용. OpenTelemetry Demo를 AWS EKS에 배포하고, 오픈소스 관측 스택으로 모니터링·알림을 구성한 뒤 장애 주입 시나리오를 수행해 **탐지 → 분석 → 원인 규명 → 재발 방지** 과정을 문서로 남긴다.
 
 ---
@@ -70,8 +70,8 @@
 
 ## 3. 보안 설계 (퍼블릭 서브넷 보완)
 
-- **ALB 인바운드**: `alb.ingress.kubernetes.io/inbound-cidrs`를 Terraform 변수(본인 IP)로 주입. 시연 시에만 일시 확대.
-- **EKS API 엔드포인트**: public access CIDR을 본인 IP로 제한.
+- **ALB 인바운드**: `alb.ingress.kubernetes.io/inbound-cidrs`를 배포 스크립트(`scripts/deploy-demo.ps1`)가 실행 시점의 본인 IP로 주입 (커밋하지 않는 로컬 values 파일). 시연 시에만 일시 확대.
+- **EKS API 엔드포인트**: public access CIDR을 본인 IP로 제한 (`scripts/up.ps1`이 실행할 때마다 현재 IP로 갱신). 노드는 프라이빗 엔드포인트로 접속.
 - **노드 보안 그룹**: SSH 미개방, 외부 인바운드는 ALB에서 오는 트래픽만 허용.
 - **Grafana**: 기본 admin 비밀번호 변경 (Kubernetes Secret으로 관리, Git에 커밋 금지).
 - **IAM**: Load Balancer Controller 등 애드온은 IRSA 또는 EKS Pod Identity로 최소 권한 부여.
@@ -95,33 +95,37 @@
 
 **비용 사고 방지**
 1. AWS Budgets 월 $40, 알림 $20(50%) / $40(100%) / 예상 초과
-2. 한 줄로 전체 삭제하는 스크립트 (`scripts/down`)
+2. 한 줄로 전체 삭제하는 스크립트 (`scripts/down.ps1`)
 3. 작업 종료 시 삭제 확인 체크리스트
 
 ---
 
 ## 5. 진행 단계
 
-### Phase 0. 사전 준비
-- [ ] AWS 계정 / IAM 사용자(또는 SSO) 준비, MFA 설정
-- [ ] 로컬 도구 설치: AWS CLI, Terraform, kubectl, Helm
-- [ ] AWS Budgets 알림 설정
-- [ ] Terraform state 백엔드(S3) 생성
-- [ ] GitHub 저장소 생성
+### Phase 0. 사전 준비 ✅ (2026-10-29)
+- [x] AWS 계정 / IAM 사용자 준비: `terraform-admin` 프로필 (IAM 사용자 `terraform_admin`). MFA 설정 여부는 미확인
+- [x] 로컬 도구 설치: AWS CLI 2.30, Terraform 1.15, kubectl 1.37(PowerShell 별칭), Helm 4.3
+- [x] AWS Budgets 알림 설정: 월 $40, 크레딧 차감 전 금액 기준 (`terraform/00-bootstrap`)
+- [x] Terraform state 백엔드(S3) 생성: `otel-demo-tfstate-520426835144`, 버전 관리·암호화·퍼블릭 차단
+- [x] GitHub 저장소 생성: [zie-ning/otel-demo-eks](https://github.com/zie-ning/otel-demo-eks) (공개)
 
-### Phase 1. 인프라 (Terraform)
-- [ ] VPC: 퍼블릭 서브넷 2~3개 AZ, NAT 없음
-- [ ] EKS 클러스터 + 매니지드 노드그룹 (온디맨드)
-- [ ] API 엔드포인트 접근 CIDR 제한
-- [ ] 애드온 단계(별도 apply): AWS Load Balancer Controller, metrics-server
+### Phase 1. 인프라 (Terraform) ✅ (2026-10-29)
+- [x] VPC: 퍼블릭 서브넷 2개 AZ(2a, 2c), NAT 없음
+- [x] EKS 1.37 클러스터 + 매니지드 노드그룹 (온디맨드): app × 2, monitoring × 1(taint)
+  - 무료 플랜이라 t3.xlarge가 거부되어 m7i-flex.large로 변경 ([operations.md](operations.md) 문제 해결 참고)
+- [x] API 엔드포인트 접근 CIDR 제한 + 프라이빗 엔드포인트
+- [x] 애드온 단계(별도 apply): AWS Load Balancer Controller(Pod Identity), metrics-server
   - EBS CSI Driver는 제외: 영구 볼륨 없이 운영하고 클러스터 삭제 시 데이터도 함께 사라지는 방식이라 불필요. 필요해지면 추가
-- [ ] up/down 스크립트, 운영 지침([docs/operations.md](docs/operations.md))
-- **완료 기준**: `kubectl get nodes` 정상, `terraform destroy`로 깨끗하게 삭제되는 것까지 확인
+- [x] up/down 스크립트, 운영 지침([operations.md](operations.md))
+- **완료 기준**: `kubectl get nodes` 정상 ✅, `down.ps1`로 깨끗하게 삭제되는 것까지 확인 ✅ (2026-10-30, 02-addons 6개 + 01-cluster 50개 삭제, EKS·EC2·ALB·VPC·EBS·ENI 잔여 없음. 첫 실행에서 스크립트 버그 2건 수정 후 재실행)
 
-### Phase 2. 데모 배포 (Helm, 기본 구성)
-- [ ] opentelemetry-demo 차트를 **기본 관측 스택 그대로** 배포해 정상 동작 확인
-- [ ] Ingress(ALB) + 본인 IP 제한
-- **완료 기준**: ALB 주소로 쇼핑몰 접속, load-generator 트래픽 흐름, Jaeger에서 트레이스 확인
+### Phase 2. 데모 배포 (Helm, 기본 구성) ✅ (2026-10-29)
+- [x] opentelemetry-demo 차트 0.42.6(앱 3.1.0)을 **기본 관측 스택 그대로** 배포해 정상 동작 확인
+  - 데모 서비스는 app 노드, Jaeger·Prometheus·Grafana·OpenSearch는 monitoring 노드, Collector는 DaemonSet으로 전 노드
+- [x] Ingress(ALB, target-type ip) + 본인 IP 제한 (`scripts/deploy-demo.ps1`)
+- [x] 트레이스 관찰 1단계: quote·shipping 직접 호출 트레이스 분석, 관측 데이터 품질 문제 발견 ([observability-findings.md](observability-findings.md))
+- [ ] 트레이스 관찰 2단계: 화면 동작(홈, 상품, 통화 변경, 장바구니, 주문)별 트레이스 관찰
+- **완료 기준**: ALB 주소로 쇼핑몰 접속 ✅, load-generator 트래픽 흐름 ✅, Jaeger에서 트레이스 확인 ✅ (서비스 21개, 주문 트레이스 스팬 97개)
 
 ### Phase 3. 관측 스택 전환 (한 단계씩 바꾸고 매번 검증)
 - [ ] ① kube-prometheus-stack 설치, OTLP 수신 활성화 → Collector 메트릭 대상 변경 → 차트 내장 Prometheus 비활성화
@@ -129,7 +133,7 @@
 - [ ] ③ Tempo 도입 → 차트 내장 Jaeger 비활성화
 - [ ] ④ Loki 도입 → 차트 내장 OpenSearch 비활성화
 - [ ] ⑤ Grafana 데이터소스 연결: exemplar → 트레이스, 트레이스 → 로그
-- [ ] ⑥ 관측 데이터 품질 문제 수정 ([docs/observability-findings.md](docs/observability-findings.md)의 OBS-1~3)
+- [ ] ⑥ 관측 데이터 품질 문제 수정 ([observability-findings.md](observability-findings.md)의 OBS-1~3)
 - **완료 기준**: Grafana 하나에서 메트릭 → 트레이스 → 로그로 이동 가능
 
 ### Phase 4. SLO와 알림
@@ -165,24 +169,25 @@
 |---|---|---|
 | 알림 채널 | Slack / Discord / 이메일 | Phase 4 |
 | 장애 주입 도구 | flagd만 / Chaos Mesh 추가 | Phase 5 |
-| Terraform state | S3 (추천) / 로컬 | Phase 0 |
-| 저장소 공개 여부·구조 | 아래 초안 참고 | Phase 0 |
 | 노드 크기·대수 | m7i-flex.large × 3에서 실측 후 조정 | Phase 3 |
 | GitOps(Argo CD) 전환 | 선택 과제 | Phase 6 이후 |
 
-### 저장소 구조 초안
+정해진 사항: Terraform state는 **S3** (Phase 0), 저장소는 **GitHub 공개** (Phase 0)
+
+### 저장소 구조 (✅ 생성됨 / 예정)
 ```
 .
 ├── terraform/
-│   ├── 01-cluster/        # VPC, EKS, 노드그룹
-│   └── 02-addons/         # Load Balancer Controller, metrics-server, EBS CSI
-├── helm/values/           # otel-demo, kube-prometheus-stack, tempo, loki values
-├── observability/
-│   ├── dashboards/        # Grafana 대시보드 (ConfigMap)
-│   └── alerts/            # PrometheusRule (SLO, burn-rate)
-├── scenarios/             # 시나리오별 실행 절차와 포스트모템
-├── scripts/               # up / down 스크립트
-└── docs/                  # 아키텍처, 의사결정 기록
+│   ├── 00-bootstrap/      # ✅ state 버킷, 예산 알림 (영구)
+│   ├── 01-cluster/        # ✅ VPC, EKS, 노드그룹
+│   └── 02-addons/         # ✅ Load Balancer Controller, metrics-server
+├── helm/values/           # ✅ otel-demo / 예정: kube-prometheus-stack, tempo, loki
+├── observability/         # 예정
+│   ├── dashboards/        #   Grafana 대시보드 (ConfigMap)
+│   └── alerts/            #   PrometheusRule (SLO, burn-rate)
+├── scenarios/             # 예정: 시나리오별 실행 절차와 포스트모템
+├── scripts/               # ✅ up / deploy-demo / down
+└── docs/                  # ✅ PLAN, operations, observability-findings
 ```
 
 ---

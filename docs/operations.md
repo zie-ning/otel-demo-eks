@@ -182,6 +182,13 @@ helm uninstall otel-demo -n otel-demo --wait
 .\scripts\deploy-demo.ps1
 ```
 
+### down.ps1 -AutoApprove가 "Too many command line arguments"로 실패한다
+증상: `02-addons destroy` 단계에서 `Expected at most one positional argument.`
+
+원인: `$approve = if (...) { @('-auto-approve') } else { @() }`처럼 `if` 식의 결과를 그대로 받으면, 요소 1개짜리 배열이 **문자열 하나로 풀린다.** 문자열을 `@approve`로 펼치면 글자 단위로 쪼개져 `- a u t o - a p p r o v e`가 전달된다.
+
+해결: `$approve = @(if ($AutoApprove) { '-auto-approve' })`로 항상 배열을 유지 (2026-10-30, up.ps1·down.ps1 모두 수정). 같은 실행에서 `kubectl -o jsonpath`의 큰따옴표가 깨지는 문제도 있어, LoadBalancer Service 조회를 `-o json` + PowerShell 필터로 바꿨다.
+
 ### up.ps1에서 02-addons가 실패한다
 - `Error: Kubernetes cluster unreachable`: kubeconfig나 IP 허용 목록 문제다. 위의 IP 변경 항목을 확인한다.
 - 01-cluster state를 읽지 못한다: 01-cluster apply가 끝까지 성공했는지 확인한다.

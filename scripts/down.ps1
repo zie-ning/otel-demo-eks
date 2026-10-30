@@ -4,7 +4,8 @@
 param([switch]$AutoApprove)
 
 . "$PSScriptRoot\common.ps1"
-$approve = if ($AutoApprove) { @('-auto-approve') } else { @() }
+# if 식의 결과를 바로 받으면 요소 1개짜리 배열이 문자열로 풀려, @approve 펼칠 때 글자 단위로 쪼개진다
+$approve = @(if ($AutoApprove) { '-auto-approve' })
 
 # 1) 쿠버네티스가 만든 AWS 리소스 먼저 정리
 #    Ingress/LoadBalancer Service로 생긴 ALB·NLB와 보안 그룹은 Terraform state에 없다.
@@ -16,11 +17,12 @@ if ($LASTEXITCODE -eq 0) { $clusterExists = $true }
 if ($clusterExists) {
     Invoke-Native 'kubeconfig 갱신' { aws eks update-kubeconfig --name $ClusterName --region $Region --profile $Profile_ }
     Invoke-Native 'Ingress 삭제' { & $Kubectl delete ingress --all --all-namespaces --wait=true }
+    # jsonpath의 큰따옴표는 PowerShell 5.1 인자 전달에서 깨지므로 JSON으로 받아 PowerShell에서 거른다
     Invoke-Native 'LoadBalancer Service 삭제' {
-        $svcs = & $Kubectl get svc --all-namespaces -o jsonpath='{range .items[?(@.spec.type=="LoadBalancer")]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'
-        foreach ($s in ($svcs -split "`n" | Where-Object { $_ })) {
-            $ns, $name = $s -split '/'
-            & $Kubectl delete svc $name -n $ns --wait=true
+        $svcs = (& $Kubectl get svc --all-namespaces -o json | Out-String | ConvertFrom-Json).items |
+            Where-Object { $_.spec.type -eq 'LoadBalancer' }
+        foreach ($s in $svcs) {
+            & $Kubectl delete svc $s.metadata.name -n $s.metadata.namespace --wait=true
         }
         $global:LASTEXITCODE = 0
     }
