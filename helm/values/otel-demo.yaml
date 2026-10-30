@@ -9,6 +9,13 @@ default:
       role: app
 
 components:
+  # 브라우저 텔레메트리 전송 주소. 차트 기본값(http://localhost:8080/...)은 port-forward 접속용이라
+  # ALB로 접속한 브라우저에서는 실패한다. 상대 경로로 두면 접속한 주소의 frontend-proxy를 거쳐 Collector로 간다.
+  frontend:
+    envOverrides:
+      - name: PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        value: /otlp-http/v1/traces
+
   # 외부 진입점. AWS Load Balancer Controller가 이 Ingress를 보고 ALB를 만든다.
   # 접근 허용 IP(inbound-cidrs)는 커밋하지 않도록 배포 스크립트가 따로 주입한다.
   frontend-proxy:

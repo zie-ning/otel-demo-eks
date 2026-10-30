@@ -1,6 +1,6 @@
 # OpenTelemetry Demo on AWS EKS — 프로젝트 계획
 
-> 작성일: 2026-10-29 · 진행 상황 갱신: 2026-10-30
+> 작성일: 2026-10-29 · 진행 상황 갱신: 2026-10-30 (Phase 2 완료)
 > 목적: 포트폴리오용. OpenTelemetry Demo를 AWS EKS에 배포하고, 오픈소스 관측 스택으로 모니터링·알림을 구성한 뒤 장애 주입 시나리오를 수행해 **탐지 → 분석 → 원인 규명 → 재발 방지** 과정을 문서로 남긴다.
 
 ---
@@ -124,8 +124,13 @@
   - 데모 서비스는 app 노드, Jaeger·Prometheus·Grafana·OpenSearch는 monitoring 노드, Collector는 DaemonSet으로 전 노드
 - [x] Ingress(ALB, target-type ip) + 본인 IP 제한 (`scripts/deploy-demo.ps1`)
 - [x] 트레이스 관찰 1단계: quote·shipping 직접 호출 트레이스 분석, 관측 데이터 품질 문제 발견 ([observability-findings.md](observability-findings.md))
-- [ ] 트레이스 관찰 2단계: 화면 동작(홈, 상품, 통화 변경, 장바구니, 주문)별 트레이스 관찰
-- **완료 기준**: ALB 주소로 쇼핑몰 접속 ✅, load-generator 트래픽 흐름 ✅, Jaeger에서 트레이스 확인 ✅ (서비스 21개, 주문 트레이스 스팬 97개)
+- [x] 트레이스 관찰 2단계 (2026-10-30): 화면 동작(홈, 상품 클릭, 장바구니 담기, 주문)별 트레이스 관찰. 통화 변경은 생략
+  - 브라우저 트레이스가 수집되지 않던 문제(OBS-4)를 발견해 수정: `PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`를 상대 경로로 변경
+  - 주문 1건 = checkout 트레이스(스팬 58개) + Kafka 뒤 별도 트레이스 2개(accounting, fraud-detection, `FOLLOWS_FROM` 링크)
+  - 발견한 패턴: 서비스 간 호출에서 처리보다 연결·대기 비용이 큼(`dns.lookup`/`tcp.connect`는 첫 연결 때만), 추천의 N+1 호출, checkout 내부 미계측 구간 약 70ms, payment·cart의 원격 flagd 질의 비용, 브라우저-서버 시계 차이 약 0.88초
+  - 추가 품질 문제: OBS-5(accounting 소비 스팬이 대기 시간 포함), OBS-2 대상에 accounting 추가
+- **완료 기준**: ALB 주소로 쇼핑몰 접속 ✅, load-generator 트래픽 흐름 ✅, Jaeger에서 트레이스 확인 ✅ (서비스 21개, 주문 트레이스 확인)
+- Phase 3에서 이어서 볼 것: 장애 시나리오와 비교할 **정상 주문 트레이스** `54e11879d961993975e9bdfbbca50178` (클러스터 삭제 시 사라지므로 화면 캡처로 보관)
 
 ### Phase 3. 관측 스택 전환 (한 단계씩 바꾸고 매번 검증)
 - [ ] ① kube-prometheus-stack 설치, OTLP 수신 활성화 → Collector 메트릭 대상 변경 → 차트 내장 Prometheus 비활성화
@@ -133,7 +138,8 @@
 - [ ] ③ Tempo 도입 → 차트 내장 Jaeger 비활성화
 - [ ] ④ Loki 도입 → 차트 내장 OpenSearch 비활성화
 - [ ] ⑤ Grafana 데이터소스 연결: exemplar → 트레이스, 트레이스 → 로그
-- [ ] ⑥ 관측 데이터 품질 문제 수정 ([observability-findings.md](observability-findings.md)의 OBS-1~3)
+- [ ] ⑥ 관측 데이터 품질 문제 수정 ([observability-findings.md](observability-findings.md)의 OBS-1~3, OBS-5는 기록만)
+- [ ] ⑦ ALB 헬스체크(`ELB-HealthChecker`) 트레이스를 Collector에서 걸러내기 (15초마다 2건씩 쌓이는 잡음)
 - **완료 기준**: Grafana 하나에서 메트릭 → 트레이스 → 로그로 이동 가능
 
 ### Phase 4. SLO와 알림
