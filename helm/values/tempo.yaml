@@ -26,6 +26,9 @@ tempo:
   metricsGenerator:
     enabled: true
     remoteWriteUrl: http://kps-prometheus:9090/api/v1/write
+    # 차트 기본값(/tmp/tempo)은 크기 제한 없는 emptyDir라, 3Gi 제한이 걸린 데이터 볼륨 안으로 옮긴다 (PR #10 리뷰)
+    storage:
+      path: /var/tempo/metrics
   overrides:
     defaults:
       metrics_generator:

@@ -160,9 +160,9 @@ kube-prometheus-stack을 고른 이유: 내장 Prometheus도 Alertmanager·kube-
 - 비교 도구: 임시 스크립트(Grafana 데이터소스 프록시로 Tempo, ALB `/jaeger`로 Jaeger 조회). 저장소에는 넣지 않았다.
 
 **진행 중 발견해 수정한 것**
-1. **Jaeger가 ④ 이후 트레이스를 받지 못하고 있었다.** `extraEnv`는 목록이라 values에 적으면 차트 기본 목록을 통째로 바꾸는데, ④에서 `PROMETHEUS_ADDR`만 바꾸려고 목록을 다시 적으며 `JAEGER_GRPC_PORT`를 빠뜨렸다. Jaeger 로그의 OTLP 수신 주소가 `[::]:36087`, Collector 로그는 `jaeger:4317 connection refused`. 비교를 위해 변수를 되살렸고, 이후 Jaeger 자체를 제거했다.
+1. **Jaeger가 ④ 이후 트레이스를 받지 못하고 있었다.** `extraEnv` 목록을 덮어쓰며 `JAEGER_GRPC_PORT`를 빠뜨려 Collector 전송이 거부됐다(Jaeger OTLP 수신 주소 `[::]:36087`). 비교를 위해 변수를 되살렸고, 이후 Jaeger를 제거했다. → [operations.md](../operations.md#5-문제-해결)
 2. **Grafana 데이터소스가 바뀌지 않았다.** 사이드카 재적용이 500으로 실패, Grafana 로그 `data source with the same uid already exists`. 새 이름(Tempo)이 기존 이름(Jaeger)이 쓰던 uid를 쓰려 해서 충돌했다. Grafana 파드 재시작으로 해결(DB가 emptyDir). 새 클러스터에서는 생기지 않는다. → [operations.md](../operations.md#5-문제-해결)
-3. **Tempo가 OOMKilled.** 메모리 제한 1Gi로 배포하고 12분 만에 종료(exit 137), 재시작 직후 841Mi. 제한 2Gi + `GOMEMLIMIT`로 바꾼 뒤 비교 조회 중 최대 777Mi, 재시작 0회.
+3. **Tempo가 OOMKilled.** 메모리 제한을 1Gi에서 2Gi로 올리고 `GOMEMLIMIT`를 설정해 해결했다. → [operations.md](../operations.md#5-문제-해결)
 4. 차트 기본 Jaeger 수신기(thrift·gRPC)는 `null`로 지우면 서비스 템플릿이 값을 참조해 렌더링이 실패한다. 클러스터 내부 ClusterIP라 그대로 두었다.
 
 **Jaeger 비활성화**
