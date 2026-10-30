@@ -1,0 +1,249 @@
+# kube-prometheus-stack 차트 values (차트 버전은 scripts/deploy-observability.ps1에서 고정)
+# Phase 3-B ③: Prometheus·Alertmanager·operator·node-exporter·kube-state-metrics 설치.
+# Grafana는 ④에서 켠다. 차트 내장 Prometheus와 병행 운영하며 Collector가 양쪽에 같은 메트릭을 보낸다.
+#
+# 자원 원칙: monitoring 노드(m7i-flex.large, 할당 가능 CPU 1930m)는 이미 CPU requests 82%가 예약되어 있다.
+# 스케줄링은 실제 사용량이 아니라 requests 합으로 판단하므로 requests는 실제 필요량에 가깝게 작게 잡는다.
+
+# 리소스 이름 접두사를 짧게 (서비스: kps-prometheus, kps-alertmanager, kps-operator)
+fullnameOverride: kps
+
+# 관측 도구는 monitoring 노드그룹 전용 taint를 견디고 그 노드로만 간다 (otel-demo.yaml과 같은 규칙)
+x-monitoringNode: &monitoringNode
+  nodeSelector:
+    role: monitoring
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: monitoring
+      effect: NoSchedule
+
+# EKS는 컨트롤 플레인을 AWS가 운영해 controller-manager, scheduler, etcd에 접근할 수 없다.
+# kube-proxy는 메트릭을 127.0.0.1에만 열어 수집할 수 없다. 켜 두면 수집 실패와 거짓 알림만 생긴다.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+defaultRules:
+  rules:
+    etcd: false
+    kubeControllerManager: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeProxy: false
+    windows: false
+
+# Phase 3-B ④: 데모 차트 내장 Grafana를 대신한다.
+# 데모 대시보드·알림은 helm/grafana(kustomize)가 ConfigMap으로 만들고 사이드카가 읽는다.
+grafana:
+  enabled: true
+  <<: *monitoringNode
+  # admin 계정은 deploy-observability.ps1이 만드는 Secret을 쓴다 (비밀번호는 Git에 남기지 않음)
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  grafana.ini:
+    # frontend-proxy(Envoy)가 /grafana 경로를 경로 그대로 넘기므로 하위 경로로 서비스한다
+    server:
+      root_url: "%(protocol)s://%(domain)s:%(http_port)s/grafana"
+      serve_from_sub_path: true
+    # 내장 Grafana는 익명 Admin이었다. 익명은 읽기 전용으로 낮추고 편집은 admin 로그인으로 한다.
+    auth.anonymous:
+      enabled: true
+      org_name: Main Org.
+      org_role: Viewer
+  # ⑥(Loki 전환) 전까지 webstore-logs 데이터소스용
+  plugins:
+    - grafana-opensearch-datasource
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  sidecar:
+    # 대시보드를 ConfigMap 주석(grafana_folder) 값의 폴더에 넣는다.
+    # kps 기본 대시보드는 아래 annotations로 "Kubernetes", 데모 대시보드는 helm/grafana/kustomization.yaml에서 "OpenTelemetry Demo"
+    dashboards:
+      folderAnnotation: grafana_folder
+      annotations:
+        grafana_folder: Kubernetes
+      provider:
+        foldersFromFilesStructure: true
+    # 대시보드·데이터소스·알림 사이드카 공통
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+      limits:
+        memory: 128Mi
+    alerts:
+      enabled: true
+      label: grafana_alert
+      labelValue: "1"
+    datasources:
+      # 데모 대시보드·알림이 참조하는 uid로 맞춘다. kps 기본 대시보드는 데이터소스 변수를 쓰므로 영향 없음
+      uid: webstore-metrics
+      # 데모 SDK 메트릭 전송 주기(60초)에 맞춘다 (내장 Grafana 설정과 동일)
+      defaultDatasourceScrapeInterval: 60s
+      exemplarTraceIdDestinations:
+        datasourceUid: webstore-traces
+        traceIdLabelName: trace_id
+      # Alertmanager 데이터소스는 이 Grafana 버전에서 "Plugin unavailable"로 동작하지 않는다.
+      # Grafana 알림은 contact point(helm/grafana/alerting/contact-points.yml)로 Alertmanager에 보낸다.
+      alertmanager:
+        enabled: false
+  # serve_from_sub_path 때문에 /metrics는 localhost:3000/grafana/metrics로 리다이렉트되어 수집이 실패한다
+  serviceMonitor:
+    path: /grafana/metrics
+  # ⑤(Tempo)·⑥(Loki) 전까지 차트 내장 Jaeger·OpenSearch를 그대로 쓴다 (내장 Grafana 데이터소스와 같은 설정)
+  additionalDataSources:
+    - name: Jaeger
+      uid: webstore-traces
+      type: jaeger
+      url: http://jaeger.otel-demo:16686/jaeger/ui
+      editable: true
+      jsonData:
+        tracesToLogsV2:
+          datasourceUid: webstore-logs
+          spanStartTimeShift: "-20m"
+          spanEndTimeShift: "20m"
+          filterByTraceID: true
+          filterBySpanID: true
+          customQuery: true
+          # Grafana 프로비저닝 파일은 ${...}를 환경변수로 치환하므로 $$로 이스케이프한다 (원본 데모 설정과 동일)
+          query: traceId:"$${__trace.traceId}" AND spanId:"$${__span.spanId}"
+    - name: OpenSearch
+      uid: webstore-logs
+      type: grafana-opensearch-datasource
+      url: http://opensearch.otel-demo:9200/
+      access: proxy
+      editable: true
+      jsonData:
+        database: otel-logs-*
+        flavor: opensearch
+        logLevelField: severity.text.keyword
+        logMessageField: body
+        pplEnabled: true
+        timeField: observedTimestamp
+        version: 3.8.0
+
+prometheusOperator:
+  <<: *monitoringNode
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+  admissionWebhooks:
+    patch:
+      <<: *monitoringNode
+  # Prometheus·Alertmanager 파드에 붙는 설정 리로더 사이드카
+  prometheusConfigReloader:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 25Mi
+      limits:
+        memory: 64Mi
+
+prometheus:
+  prometheusSpec:
+    <<: *monitoringNode
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        memory: 1536Mi
+    # 클러스터를 작업할 때만 띄우므로 짧게. 저장소는 emptyDir(차트 기본, storageSpec 미지정)
+    retention: 2d
+
+    # 차트 내장 Prometheus와 같은 OTLP·exemplar 설정 (메트릭 이름·라벨이 같아야 대시보드가 그대로 동작한다)
+    enableOTLPReceiver: true
+    enableFeatures:
+      - exemplar-storage
+    tsdb:
+      outOfOrderTimeWindow: 30m
+    otlp:
+      keepIdentifyingResourceAttributes: true
+      promoteResourceAttributes:
+        - service.instance.id
+        - service.name
+        - service.namespace
+        - service.version
+        - cloud.availability_zone
+        - cloud.region
+        - deployment.environment.name
+        - k8s.cluster.name
+        - k8s.container.name
+        - k8s.cronjob.name
+        - k8s.daemonset.name
+        - k8s.deployment.name
+        - k8s.job.name
+        - k8s.namespace.name
+        - k8s.node.name
+        - k8s.pod.name
+        - k8s.replicaset.name
+        - k8s.statefulset.name
+        - container.name
+        - host.name
+        - postgresql.database.name
+        - postgresql.schema.name
+        - postgresql.table.name
+        - postgresql.index.name
+
+    # 차트 릴리스 라벨이 없는 ServiceMonitor·PrometheusRule도 수집한다 (Phase 4 SLO 규칙을 별도 파일로 둘 예정)
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    scrapeConfigSelectorNilUsesHelmValues: false
+
+alertmanager:
+  alertmanagerSpec:
+    <<: *monitoringNode
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 128Mi
+
+kube-state-metrics:
+  <<: *monitoringNode
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+# 노드는 모두 리눅스(AL2023)라 AIX·macOS용 대시보드와 규칙은 만들지 않는다
+nodeExporter:
+  operatingSystems:
+    aix:
+      enabled: false
+    darwin:
+      enabled: false
+
+# DaemonSet이라 모든 노드(monitoring 포함)에 떠야 한다. toleration만 준다.
+prometheus-node-exporter:
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: monitoring
+      effect: NoSchedule
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 64Mi
