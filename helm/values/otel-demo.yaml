@@ -66,14 +66,17 @@ opentelemetry-collector:
             action: upsert
       # OBS-3 (#3): 브라우저 데이터는 frontend-proxy 연결로 들어와 프록시 파드 정보가 붙는다.
       # 브라우저는 파드가 아니므로 쿠버네티스·호스트 관련 속성을 지운다.
+      # 브라우저 스팬에서 만든 span metrics도 metrics 파이프라인의 resource를 지나며 host.name이 다시 붙으므로
+      # 같은 처리를 메트릭에도 적용한다.
       transform/browser_resource:
         error_mode: ignore
-        trace_statements:
+        trace_statements: &browserResourceStatements
           - context: resource
             statements:
               - delete_matching_keys(attributes, "^(k8s|container)\\..*") where attributes["service.name"] == "frontend-web"
               - delete_key(attributes, "host.name") where attributes["service.name"] == "frontend-web"
               - delete_key(attributes, "service.instance.id") where attributes["service.name"] == "frontend-web"
+        metric_statements: *browserResourceStatements
     service:
       pipelines:
         traces:
@@ -88,6 +91,14 @@ opentelemetry-collector:
             - gen_ai_normalizer
             - transform/redact_sensitive_data
             - redaction
+        metrics:
+          # 차트 기본 순서에 transform/browser_resource만 추가 (span_metrics로 만든 브라우저 메트릭 처리)
+          processors:
+            - k8s_attributes
+            - memory_limiter
+            - resource_detection
+            - resource
+            - transform/browser_resource
 
 # 관측 도구는 monitoring 노드그룹 전용 taint를 견디고 그 노드로만 간다.
 # 같은 규칙을 아래 하위 차트에서 YAML 앵커로 재사용한다.
