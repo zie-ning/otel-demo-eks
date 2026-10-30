@@ -5,11 +5,12 @@ Phase 2에서 데모를 차트 기본 구성으로 배포한 뒤, Jaeger 트레�
 
 | ID | 문제 | 영향 | 상태 |
 |---|---|---|---|
-| OBS-1 | 모든 스팬의 `host.name`이 앱이 아닌 Collector 파드 이름으로 덮어써짐 | 실행 위치 판단 오류 | 미해결 (Phase 3) |
-| OBS-2 | quote, cart, accounting 스팬에 쿠버네티스 메타데이터(`k8s.*`)가 붙지 않음 | 파드·노드 단위 장애 분석 불가 | 미해결 (Phase 3) |
-| OBS-3 | 브라우저(`frontend-web`) 스팬에 frontend-proxy 파드의 메타데이터가 붙음 | 브라우저 데이터를 서버 파드로 오인 | 미해결 (Phase 3) |
+| OBS-1 | 모든 스팬의 `host.name`이 앱이 아닌 Collector 파드 이름으로 덮어써짐 | 실행 위치 판단 오류 | **해결** (2026-10-30, #1) |
+| OBS-2 | quote, cart, accounting 스팬에 쿠버네티스 메타데이터(`k8s.*`)가 붙지 않음 | 파드·노드 단위 장애 분석 불가 | 미해결 (Phase 3-A ②, #2) |
+| OBS-3 | 브라우저(`frontend-web`) 스팬에 frontend-proxy 파드의 메타데이터가 붙음 | 브라우저 데이터를 서버 파드로 오인 | **해결** (2026-10-30, #3) |
 | OBS-4 | 실제 사용자 브라우저의 트레이스가 수집되지 않음 (전송 주소가 `localhost:8080`) | 사용자 체감 지연과 브라우저 구간 관측 불가 | **해결** (2026-10-30) |
 | OBS-5 | accounting의 `order-consumed` 스팬이 메시지 대기 시간까지 포함해 55분짜리로 기록됨 | 소요 시간 통계 왜곡, 트레이스 화면 축이 비정상적으로 길어짐 | 기록만 (데모 코드 영역) |
+| OBS-6 | ALB 헬스체크가 15초마다 frontend-proxy → frontend 트레이스를 만듦 | 실제 트래픽 트레이스가 묻히고 요청 수·지연 지표 왜곡 | **해결** (2026-10-30, #4) |
 
 환경: 차트 `opentelemetry-demo` 0.42.6 (앱 3.1.0), Collector는 DaemonSet 모드(노드마다 1개), 확인일 2026-10-29
 
@@ -40,6 +41,15 @@ resource_detection:
 ### 해결 방향
 - `resource_detection`에서 `system` 감지기를 빼거나 덮어쓰기(`override`)를 끈다.
 - 노드 식별은 `k8s.node.name`(OBS-2 해결 후)으로 일원화한다.
+
+### 해결 (2026-10-30)
+`helm/values/otel-demo.yaml`의 `opentelemetry-collector.config`:
+- `resource_detection.detectors`를 `[env]`로 바꿔 `system` 감지기를 뺐다.
+- `resource` 프로세서에서 `host.name`을 Collector의 `K8S_NODE_NAME`(실행 노드 이름)으로 `upsert`한다. Collector가 DaemonSet이고 앱은 같은 노드의 Collector로 보내므로(`internalTrafficPolicy: Local`) Collector 노드 = 앱 노드다.
+- 그냥 지우지 않은 이유: hostmetrics(노드 CPU·메모리)처럼 리소스 속성 없이 들어오는 데이터도 노드를 구분할 수 있어야 한다. Collector 자체 텔레메트리도 차트 기본값으로 `host.name`에 노드 이름을 쓴다.
+- 앱이 직접 보낸 `host.name`이 있어도 노드 이름으로 바뀐다. 파드 구분은 `k8s.pod.name`으로 한다.
+
+결과: `host.name`이 Collector 파드 이름인 서비스 **20개 → 0개**. 예: quote `ip-10-0-0-147…`(quote 파드가 실제로 있는 노드).
 
 ---
 
@@ -120,6 +130,14 @@ k8s.node.name        = ip-10-0-0-147…                      ← 〃
 ### 해결 방향
 - `service.name = frontend-web`인 데이터에는 쿠버네티스 메타데이터를 붙이지 않도록 Collector에서 예외 처리하거나, 붙은 속성을 제거한다.
 
+### 해결 (2026-10-30)
+- `k8s_attributes`에는 서비스별 예외 설정이 없어, 붙은 뒤에 지우는 방식을 택했다.
+- traces 파이프라인의 `resource` 다음에 `transform/browser_resource`를 추가해 `service.name == "frontend-web"`이면 `k8s.*`, `container.*`, `host.name`, `service.instance.id`(프록시 파드 값 `otel-demo.frontend-proxy-…`가 들어가 있었음)를 지운다. `resource` 앞에 두면 `host.name`이 다시 붙는다.
+- 같은 처리를 **metrics 파이프라인에도** 넣었다. 브라우저 스팬으로 만든 span metrics가 metrics 파이프라인의 `resource`를 지나며 `host.name`(노드 이름)이 다시 붙기 때문이다. 처음 배포 후 Prometheus `target_info{service_name="frontend-web"}`에 `host_name=ip-10-0-1-105…`가 붙은 것을 확인했다(PR #5 CodeRabbit 리뷰로 발견).
+  - 재배포 후(11:34 이후 load-generator 4분): `frontend-web`의 `target_info`와 span metrics에 `host_name`, `k8s_pod_name` 없음. hostmetrics(`system_cpu_time_seconds_total`)는 노드 3개의 `host_name`을 그대로 유지.
+
+결과: `frontend-web`의 `k8s.pod.name` 부착 **50/50 → 0/50**. 남은 리소스 속성은 브라우저가 보낸 `browser.language`, `user_agent.original`과 `service.namespace`, `service.version`뿐이다(트레이스 `0c708fe9cfab43f18298cd4987ea6400`).
+
 ---
 
 ## OBS-4. 실제 사용자 브라우저의 트레이스가 수집되지 않음
@@ -185,9 +203,44 @@ accounting [internal] order-consumed   시작 09:23:18.827   소요 3,303,176ms 
 
 ---
 
+## OBS-6. ALB 헬스체크 트레이스가 실제 트래픽을 가림
+
+### 증상 (2026-10-30)
+- ALB 대상 그룹 헬스체크(`GET /`, `User-Agent: ELB-HealthChecker/2.0`, 15초 간격)가 frontend-proxy → frontend를 거치며 매번 트레이스를 만든다.
+- load-generator 0개 상태에서 frontend-proxy 트레이스 500건 중 **261건**이 헬스체크였다.
+- 헬스체크 트레이스 1건은 스팬 6개(frontend-proxy 2, frontend 4)다(예: `2f7224c1b0727deaa3f1572691970f37`).
+
+### 영향
+- 실제 사용자 트래픽 트레이스가 Jaeger 검색 결과에서 묻힌다.
+- 요청 수·지연 지표(span metrics, Phase 4 SLO)에 헬스체크가 섞인다.
+
+### 검토한 방법
+- **Collector `filter` 프로세서로 제거 (기각)**: User-Agent 값은 6개 스팬 중 2개(frontend-proxy 서버 스팬, frontend 첫 서버 스팬)에만 있다. 필터는 스팬 단위로 동작해 나머지 4개가 부모 없는 스팬으로 남는다. 트레이스 단위로 지우려면 tail sampling용 게이트웨이 Collector가 필요하다.
+- **Envoy 설정에서 헬스체크 경로만 트레이싱 제외 (기각)**: Envoy 설정이 이미지 안 템플릿으로 생성되어, 바꾸려면 설정 파일 전체를 덮어써야 한다.
+- **헬스체크를 Envoy 관리 포트로 이동 (채택)**: 관리 포트(`10000`) 요청은 트레이싱·액세스 로그 경로(HTTP connection manager)를 거치지 않는다.
+
+### 해결 (2026-10-30)
+- Ingress 어노테이션 `alb.ingress.kubernetes.io/healthcheck-port: "10000"`, `healthcheck-path: /ready`
+- 확인: 대상 그룹 헬스체크가 `10000 /ready`로 바뀌고 대상 `healthy`. LB Controller가 노드 보안그룹에 ALB 백엔드 보안그룹 → `8080-10000` 규칙을 추가했다.
+- 결과: frontend-proxy 트레이스 중 헬스체크 **261/500 → 0/500**.
+- 대가: 헬스체크가 frontend까지는 확인하지 않고 Envoy 생존만 본다. ALB 입장의 대상은 Envoy라 의미상 맞지만, frontend 장애는 ALB 헬스체크가 아니라 관측 스택(Phase 4 알림)으로 잡아야 한다.
+
+---
+
 ## 검증 방법 (수정 후 재확인)
 ```powershell
-# 서비스별 k8s.pod.name 부착 여부와 host.name 값 집계 (Jaeger API)
-# 확인 기준: 모든 서버 서비스에 k8s.pod.name 존재, frontend-web에는 없음, host.name이 Collector 파드 이름이 아님
+# 서비스별 k8s.pod.name 부착 여부, host.name이 Collector 파드 이름인지, 헬스체크 트레이스 수 집계 (Jaeger API)
+.\scripts\check-resource-attributes.ps1 -JaegerUrl http://<ALB 주소>/jaeger/ui -Lookback 3h
+.\scripts\check-resource-attributes.ps1 -JaegerUrl http://<ALB 주소>/jaeger/ui -Since '2026-10-30 11:11:53'   # 배포 이후만
 ```
-수정 전후를 같은 방식으로 집계해 이 문서에 결과를 추가한다.
+확인 기준: 모든 서버 서비스에 `k8s.pod.name` 존재, `frontend-web`에는 없음, `host.name`이 Collector 파드 이름이 아님, 헬스체크 트레이스 0건
+
+### Phase 3-A ① 전후 비교 (2026-10-30)
+수정 전은 최근 3시간, 수정 후는 배포(11:11:53) 이후 load-generator 3분 실행 구간. 서비스별 최대 50 트레이스.
+
+| 항목 | 수정 전 | 수정 후 |
+|---|---|---|
+| `host.name`이 Collector 파드 이름인 서비스 | 20 / 20 | **0** / 18 |
+| `frontend-web`에 `k8s.pod.name` | 50 / 50 | **0** / 50 |
+| `k8s.pod.name` 없는 서버 서비스 | cart, quote, accounting | cart, quote, accounting (OBS-2, ② 대상) |
+| frontend-proxy 트레이스 중 헬스체크 | 261 / 500 | **0** / 500 |

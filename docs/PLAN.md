@@ -130,16 +130,34 @@
   - 발견한 패턴: 서비스 간 호출에서 처리보다 연결·대기 비용이 큼(`dns.lookup`/`tcp.connect`는 첫 연결 때만), 추천의 N+1 호출, checkout 내부 미계측 구간 약 70ms, payment·cart의 원격 flagd 질의 비용, 브라우저-서버 시계 차이 약 0.88초
   - 추가 품질 문제: OBS-5(accounting 소비 스팬이 대기 시간 포함), OBS-2 대상에 accounting 추가
 - **완료 기준**: ALB 주소로 쇼핑몰 접속 ✅, load-generator 트래픽 흐름 ✅, Jaeger에서 트레이스 확인 ✅ (서비스 21개, 주문 트레이스 확인)
-- Phase 3에서 이어서 볼 것: 장애 시나리오와 비교할 **정상 주문 트레이스** `54e11879d961993975e9bdfbbca50178` (클러스터 삭제 시 사라지므로 화면 캡처로 보관)
+- 장애 시나리오와 비교할 **정상 주문 트레이스** `54e11879d961993975e9bdfbbca50178` 화면 캡처 (2026-10-30)
+  - [전체 화면](evidence/phase2/normal-order-trace-full.png): 브라우저 스팬까지 포함. 브라우저 시계 차이(약 0.88초) 때문에 가로축이 1.1초로 늘어나 서버 막대가 왼쪽에 몰림
+  - [서버 구간 확대](evidence/phase2/normal-order-trace-server-zoom.png): 미니맵에서 2.6ms~188ms 구간을 선택한 화면. checkout의 직렬 계단 구조가 잘 보임
 
 ### Phase 3. 관측 스택 전환 (한 단계씩 바꾸고 매번 검증)
-- [ ] ① kube-prometheus-stack 설치, OTLP 수신 활성화 → Collector 메트릭 대상 변경 → 차트 내장 Prometheus 비활성화
-- [ ] ② Grafana 일원화: 데모 대시보드 ConfigMap 이전 → 차트 내장 Grafana 비활성화
-- [ ] ③ Tempo 도입 → 차트 내장 Jaeger 비활성화
-- [ ] ④ Loki 도입 → 차트 내장 OpenSearch 비활성화
-- [ ] ⑤ Grafana 데이터소스 연결: exemplar → 트레이스, 트레이스 → 로그
-- [ ] ⑥ 관측 데이터 품질 문제 수정 ([observability-findings.md](observability-findings.md)의 OBS-1~3, OBS-5는 기록만)
-- [ ] ⑦ ALB 헬스체크(`ELB-HealthChecker`) 트레이스를 Collector에서 걸러내기 (15초마다 2건씩 쌓이는 잡음)
+**3-A. 관측 데이터 품질 수정 (먼저 진행)** — [observability-findings.md](observability-findings.md)
+- [x] ① Collector 설정 수정 (브랜치 `obs/collector-resource-attributes`, 2026-10-30)
+  - OBS-1 (#1): `system` 감지기를 빼고 `host.name`을 실행 노드 이름으로 통일 → 20개 서비스 전부 Collector 이름 → 0
+  - OBS-3 (#3): `frontend-web` 데이터에서 `k8s.*`, `container.*`, `host.name`, `service.instance.id` 제거 → 50/50 → 0/50
+  - OBS-6 (#4): ALB 헬스체크를 Envoy 관리 포트 `10000`의 `/ready`로 옮김 (Collector 필터는 스팬 단위라 고아 스팬이 남아 제외) → frontend-proxy 트레이스 중 261/500 → 0/500
+  - 집계 스크립트: `scripts/check-resource-attributes.ps1`
+- [ ] ② 앱 파드 정보 주입 (브랜치 예: `obs/obs-2-pod-metadata`)
+  - OBS-2 (#2): cart, quote, accounting에 Downward API로 파드 UID·IP를 넣어 `k8s_attributes` 매칭을 확실하게 함
+- OBS-5는 데모 코드의 계측 방식 문제라 기록만 유지
+- **완료 기준**: Jaeger에서 수정 전과 같은 방식으로 집계해, 모든 서버 서비스에 `k8s.pod.name`이 붙고 `frontend-web`에는 없으며 `host.name`이 Collector 파드 이름이 아님을 확인. 결과를 observability-findings.md에 기록
+
+**3-A를 먼저 하는 이유**
+- Prometheus는 `host.name`, `k8s.pod.name` 등 리소스 속성을 **메트릭 라벨로 승격**한다. 잘못된 값이 대시보드·알림 규칙에 굳기 전에 바로잡는다.
+- Tempo로 바꾸기 전에 고치면 **같은 Jaeger, 같은 집계 방식으로 수정 전후를 비교**할 수 있다.
+- 수정 대상(Collector 가공 설정, 앱 환경변수)이 저장소 교체와 독립적이다.
+- ①과 ②는 영향 범위(Collector 하나 / 여러 서비스 배포 설정)가 달라 브랜치를 나눠 따로 검증·되돌릴 수 있게 한다.
+
+**3-B. 관측 스택 전환 (한 단계씩 바꾸고 매번 검증)**
+- [ ] ③ kube-prometheus-stack 설치, OTLP 수신 활성화 → Collector 메트릭 대상 변경 → 차트 내장 Prometheus 비활성화
+- [ ] ④ Grafana 일원화: 데모 대시보드 ConfigMap 이전 → 차트 내장 Grafana 비활성화
+- [ ] ⑤ Tempo 도입 → 차트 내장 Jaeger 비활성화
+- [ ] ⑥ Loki 도입 → 차트 내장 OpenSearch 비활성화
+- [ ] ⑦ Grafana 데이터소스 연결: exemplar → 트레이스, 트레이스 → 로그
 - **완료 기준**: Grafana 하나에서 메트릭 → 트레이스 → 로그로 이동 가능
 
 ### Phase 4. SLO와 알림

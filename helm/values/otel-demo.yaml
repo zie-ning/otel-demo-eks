@@ -26,7 +26,11 @@ components:
         alb.ingress.kubernetes.io/scheme: internet-facing
         # 노드를 거치지 않고 파드 IP로 바로 전달
         alb.ingress.kubernetes.io/target-type: ip
-        alb.ingress.kubernetes.io/healthcheck-path: /
+        # 헬스체크는 Envoy 관리 포트의 /ready로 보낸다 (이슈 #4).
+        # 서비스 포트(8080)의 / 로 보내면 Envoy가 frontend까지 트레이싱해 15초마다 트레이스가 쌓인다.
+        # 관리 포트 요청은 트레이싱·액세스 로그 경로를 거치지 않는다.
+        alb.ingress.kubernetes.io/healthcheck-port: "10000"
+        alb.ingress.kubernetes.io/healthcheck-path: /ready
       hosts:
         - host: ""
           paths:
@@ -42,6 +46,59 @@ opentelemetry-collector:
       operator: Equal
       value: monitoring
       effect: NoSchedule
+
+  # 차트 기본 설정 위에 덮어쓴다. 목록(배열)은 병합되지 않고 통째로 바뀌므로 기존 항목도 다시 적는다.
+  config:
+    processors:
+      # OBS-1 (#1): system 감지기가 host.name을 Collector 파드 이름으로 덮어써서 뺀다.
+      resource_detection:
+        detectors: [env]
+      resource:
+        attributes:
+          # 차트 기본값 유지
+          - key: service.instance.id
+            from_attribute: k8s.pod.uid
+            action: insert
+          # host.name은 실제 실행 노드 이름으로 통일한다 (DaemonSet이라 Collector 노드 = 앱 노드).
+          # hostmetrics처럼 리소스 속성이 없는 데이터도 노드를 구분할 수 있다.
+          - key: host.name
+            value: ${env:K8S_NODE_NAME}
+            action: upsert
+      # OBS-3 (#3): 브라우저 데이터는 frontend-proxy 연결로 들어와 프록시 파드 정보가 붙는다.
+      # 브라우저는 파드가 아니므로 쿠버네티스·호스트 관련 속성을 지운다.
+      # 브라우저 스팬에서 만든 span metrics도 metrics 파이프라인의 resource를 지나며 host.name이 다시 붙으므로
+      # 같은 처리를 메트릭에도 적용한다.
+      transform/browser_resource:
+        error_mode: ignore
+        trace_statements: &browserResourceStatements
+          - context: resource
+            statements:
+              - delete_matching_keys(attributes, "^(k8s|container)\\..*") where attributes["service.name"] == "frontend-web"
+              - delete_key(attributes, "host.name") where attributes["service.name"] == "frontend-web"
+              - delete_key(attributes, "service.instance.id") where attributes["service.name"] == "frontend-web"
+        metric_statements: *browserResourceStatements
+    service:
+      pipelines:
+        traces:
+          # 차트 기본 순서에 transform/browser_resource만 추가 (resource 뒤에 둬야 host.name 등이 다시 붙지 않는다)
+          processors:
+            - k8s_attributes
+            - memory_limiter
+            - resource_detection
+            - resource
+            - transform/browser_resource
+            - transform/sanitize_spans
+            - gen_ai_normalizer
+            - transform/redact_sensitive_data
+            - redaction
+        metrics:
+          # 차트 기본 순서에 transform/browser_resource만 추가 (span_metrics로 만든 브라우저 메트릭 처리)
+          processors:
+            - k8s_attributes
+            - memory_limiter
+            - resource_detection
+            - resource
+            - transform/browser_resource
 
 # 관측 도구는 monitoring 노드그룹 전용 taint를 견디고 그 노드로만 간다.
 # 같은 규칙을 아래 하위 차트에서 YAML 앵커로 재사용한다.
