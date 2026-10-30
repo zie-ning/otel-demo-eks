@@ -134,6 +134,7 @@ k8s.node.name        = ip-10-0-0-147…                      ← 〃
 - `k8s_attributes`에는 서비스별 예외 설정이 없어, 붙은 뒤에 지우는 방식을 택했다.
 - traces 파이프라인의 `resource` 다음에 `transform/browser_resource`를 추가해 `service.name == "frontend-web"`이면 `k8s.*`, `container.*`, `host.name`, `service.instance.id`(프록시 파드 값 `otel-demo.frontend-proxy-…`가 들어가 있었음)를 지운다. `resource` 앞에 두면 `host.name`이 다시 붙는다.
 - 같은 처리를 **metrics 파이프라인에도** 넣었다. 브라우저 스팬으로 만든 span metrics가 metrics 파이프라인의 `resource`를 지나며 `host.name`(노드 이름)이 다시 붙기 때문이다. 처음 배포 후 Prometheus `target_info{service_name="frontend-web"}`에 `host_name=ip-10-0-1-105…`가 붙은 것을 확인했다(PR #5 CodeRabbit 리뷰로 발견).
+  - 재배포 후(11:34 이후 load-generator 4분): `frontend-web`의 `target_info`와 span metrics에 `host_name`, `k8s_pod_name` 없음. hostmetrics(`system_cpu_time_seconds_total`)는 노드 3개의 `host_name`을 그대로 유지.
 
 결과: `frontend-web`의 `k8s.pod.name` 부착 **50/50 → 0/50**. 남은 리소스 속성은 브라우저가 보낸 `browser.language`, `user_agent.original`과 `service.namespace`, `service.version`뿐이다(트레이스 `0c708fe9cfab43f18298cd4987ea6400`).
 
