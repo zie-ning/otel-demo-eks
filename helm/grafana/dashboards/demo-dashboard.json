@@ -380,7 +380,7 @@
     },
     {
       "datasource": {
-        "type": "grafana-opensearch-datasource",
+        "type": "loki",
         "uid": "webstore-logs"
       },
       "description": "",
@@ -448,35 +448,18 @@
       "pluginVersion": "11.5.2",
       "targets": [
         {
-          "alias": "",
-          "bucketAggs": [
-            {
-              "field": "severity.text.keyword",
-              "id": "3",
-              "settings": {
-                "min_doc_count": "1",
-                "order": "desc",
-                "orderBy": "_count",
-                "size": "0"
-              },
-              "type": "terms"
-            }
-          ],
           "datasource": {
-            "type": "grafana-opensearch-datasource",
+            "type": "loki",
             "uid": "webstore-logs"
           },
+          "editorMode": "code",
+          "expr": "sum by (severity_text) (count_over_time({service_name=\"${service}\"} [$__range]))",
           "format": "table",
-          "metrics": [
-            {
-              "id": "1",
-              "type": "count"
-            }
-          ],
-          "query": "search source=otel-logs-*\n| where resource.service.name=\"${service}\"\n| stats count() by severity.text",
-          "queryType": "PPL",
-          "refId": "A",
-          "timeField": "observedTimestamp"
+          "instant": true,
+          "legendFormat": "{{severity_text}}",
+          "queryType": "instant",
+          "range": false,
+          "refId": "A"
         }
       ],
       "title": "Log Records by Severity",
@@ -484,12 +467,14 @@
         {
           "id": "organize",
           "options": {
-            "excludeByName": {},
+            "excludeByName": {
+              "Time": true
+            },
             "includeByName": {},
             "indexByName": {},
             "renameByName": {
-              "Count": "",
-              "severity.text.keyword": "Severity"
+              "severity_text": "Severity",
+              "Value #A": "Count"
             }
           }
         }
@@ -498,71 +483,12 @@
     },
     {
       "datasource": {
-        "type": "grafana-opensearch-datasource",
+        "type": "loki",
         "uid": "webstore-logs"
       },
       "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto",
-              "wrapText": false
-            },
-            "filterable": true,
-            "inspect": true
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "observedTimestamp"
-            },
-            "properties": []
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "body"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 386
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "severity.text"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 127
-              }
-            ]
-          }
-        ]
+        "defaults": {},
+        "overrides": []
       },
       "gridPos": {
         "h": 8,
@@ -572,83 +498,29 @@
       },
       "id": 17,
       "options": {
-        "cellHeight": "sm",
-        "footer": {
-          "countRows": false,
-          "fields": "",
-          "reducer": [
-            "sum"
-          ],
-          "show": false
-        },
-        "showHeader": true,
-        "sortBy": []
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
       },
       "pluginVersion": "11.5.2",
       "targets": [
         {
-          "alias": "",
-          "bucketAggs": [],
           "datasource": {
-            "type": "grafana-opensearch-datasource",
+            "type": "loki",
             "uid": "webstore-logs"
           },
-          "format": "table",
-          "hide": false,
-          "metrics": [
-            {
-              "id": "1",
-              "settings": {
-                "order": "desc",
-                "size": "100",
-                "useTimeRange": true
-              },
-              "type": "raw_data"
-            }
-          ],
-          "query": "search source=otel-logs-*\n| where resource.service.name=\"${service}\"\n| sort - observedTimestamp \n| head 100",
-          "queryType": "PPL",
-          "refId": "A",
-          "timeField": "observedTimestamp"
+          "editorMode": "code",
+          "expr": "{service_name=\"${service}\"}",
+          "maxLines": 100,
+          "queryType": "range",
+          "refId": "A"
         }
       ],
       "title": "Log Records (100 recent entries)",
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "@timestamp": true
-            },
-            "includeByName": {},
-            "indexByName": {
-              "@timestamp": 1,
-              "attributes.data_stream.dataset": 4,
-              "attributes.data_stream.namespace": 5,
-              "attributes.data_stream.type": 6,
-              "attributes.productId": 7,
-              "attributes.quantity": 8,
-              "attributes.userId": 9,
-              "body": 3,
-              "instrumentationScope.name": 10,
-              "observedTimestamp": 0,
-              "resource.container.id": 11,
-              "resource.docker.cli.cobra.command_path": 12,
-              "resource.host.name": 13,
-              "resource.service.name": 14,
-              "resource.telemetry.sdk.language": 15,
-              "resource.telemetry.sdk.name": 16,
-              "resource.telemetry.sdk.version": 17,
-              "severity.number": 18,
-              "severity.text": 2,
-              "spanId": 19,
-              "traceId": 20
-            },
-            "renameByName": {}
-          }
-        }
-      ],
-      "type": "table"
+      "type": "logs"
     },
     {
       "collapsed": false,
@@ -1104,7 +976,7 @@
     },
     {
       "datasource": {
-        "type": "jaeger",
+        "type": "tempo",
         "uid": "webstore-traces"
       },
       "fieldConfig": {
@@ -1132,10 +1004,10 @@
       "targets": [
         {
           "datasource": {
-            "type": "jaeger",
+            "type": "tempo",
             "uid": "webstore-traces"
           },
-          "queryType": "dependencyGraph",
+          "queryType": "serviceMap",
           "refId": "A"
         }
       ],

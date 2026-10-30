@@ -58,9 +58,6 @@ grafana:
       enabled: true
       org_name: Main Org.
       org_role: Viewer
-  # ⑥(Loki 전환) 전까지 webstore-logs 데이터소스용
-  plugins:
-    - grafana-opensearch-datasource
   resources:
     requests:
       cpu: 50m
@@ -102,37 +99,64 @@ grafana:
   # serve_from_sub_path 때문에 /metrics는 localhost:3000/grafana/metrics로 리다이렉트되어 수집이 실패한다
   serviceMonitor:
     path: /grafana/metrics
-  # ⑤(Tempo)·⑥(Loki) 전까지 차트 내장 Jaeger·OpenSearch를 그대로 쓴다 (내장 Grafana 데이터소스와 같은 설정)
+  # 트레이스는 Tempo(⑤), 로그는 Loki(⑥)
   additionalDataSources:
-    - name: Jaeger
+    # 데모 대시보드·exemplar 링크가 참조하는 uid(webstore-traces)를 Jaeger에서 넘겨받는다
+    - name: Tempo
       uid: webstore-traces
-      type: jaeger
-      url: http://jaeger.otel-demo:16686/jaeger/ui
+      type: tempo
+      url: http://tempo.monitoring:3200
       editable: true
       jsonData:
+        # 트레이스 → 로그: 스팬의 trace_id·span_id로 Loki 로그를 찾는다 (⑦에서 동작 확인)
         tracesToLogsV2:
           datasourceUid: webstore-logs
           spanStartTimeShift: "-20m"
           spanEndTimeShift: "20m"
-          filterByTraceID: true
-          filterBySpanID: true
           customQuery: true
-          # Grafana 프로비저닝 파일은 ${...}를 환경변수로 치환하므로 $$로 이스케이프한다 (원본 데모 설정과 동일)
-          query: traceId:"$${__trace.traceId}" AND spanId:"$${__span.spanId}"
-    - name: OpenSearch
+          # trace_id·span_id는 Loki 구조화 메타데이터라 라벨 셀렉터가 아니라 파이프라인 필터로 건다.
+          # LogQL은 빈 값과 일치하지 않는 라벨 조건이 하나 이상 필요해 service_name=~".+"를 둔다.
+          # Grafana 프로비저닝 파일은 ${...}를 환경변수로 치환하므로 $$로 이스케이프한다
+          query: '{service_name=~".+"} | trace_id="$${__trace.traceId}" | span_id="$${__span.spanId}"'
+        # 트레이스 → 지표: 스팬의 서비스로 Collector span metrics(RED) 그래프를 연다 (⑦).
+        # $__tags는 아래 tags 매핑(service.name → service_name 라벨)으로 치환된다.
+        # span metrics는 1분마다 한 번 들어오므로 rate 구간은 5m (1m이면 점이 하나뿐이라 결과가 비어 있음)
+        tracesToMetrics:
+          datasourceUid: webstore-metrics
+          spanStartTimeShift: "-10m"
+          spanEndTimeShift: "10m"
+          tags:
+            - key: service.name
+              value: service_name
+          queries:
+            - name: 요청률
+              query: sum by (span_name) (rate(traces_span_metrics_calls_total{$$__tags}[5m]))
+            - name: 에러율
+              query: sum by (span_name) (rate(traces_span_metrics_calls_total{$$__tags, status_code="STATUS_CODE_ERROR"}[5m]))
+            - name: p95 지연(ms)
+              query: histogram_quantile(0.95, sum by (le, span_name) (rate(traces_span_metrics_duration_milliseconds_bucket{$$__tags}[5m])))
+        # 서비스 맵(데모 대시보드의 Service Dependency)은 Tempo metrics-generator가 Prometheus에 쓴
+        # traces_service_graph_* 지표로 그린다 (Jaeger의 dependencyGraph를 대신함)
+        serviceMap:
+          datasourceUid: webstore-metrics
+        nodeGraph:
+          enabled: true
+    # 데모 대시보드가 참조하는 uid(webstore-logs)를 OpenSearch에서 넘겨받는다
+    - name: Loki
       uid: webstore-logs
-      type: grafana-opensearch-datasource
-      url: http://opensearch.otel-demo:9200/
-      access: proxy
+      type: loki
+      url: http://loki.monitoring:3100
       editable: true
       jsonData:
-        database: otel-logs-*
-        flavor: opensearch
-        logLevelField: severity.text.keyword
-        logMessageField: body
-        pplEnabled: true
-        timeField: observedTimestamp
-        version: 3.8.0
+        # 로그 → 트레이스: OTLP 로그의 trace_id(구조화 메타데이터)를 Tempo 링크로 표시한다 (⑦).
+        # matcherType label은 라벨과 구조화 메타데이터를 모두 찾는다
+        derivedFields:
+          - name: TraceID
+            matcherType: label
+            matcherRegex: trace_id
+            datasourceUid: webstore-traces
+            url: $${__value.raw}
+            urlDisplayLabel: Tempo에서 트레이스 보기
 
 prometheusOperator:
   <<: *monitoringNode
@@ -168,6 +192,8 @@ prometheus:
 
     # 차트 내장 Prometheus와 같은 OTLP·exemplar 설정 (메트릭 이름·라벨이 같아야 대시보드가 그대로 동작한다)
     enableOTLPReceiver: true
+    # Tempo metrics-generator가 서비스 그래프 지표를 remote write로 보낸다 (⑤)
+    enableRemoteWriteReceiver: true
     enableFeatures:
       - exemplar-storage
     tsdb:

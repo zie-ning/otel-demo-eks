@@ -1,0 +1,62 @@
+# Tempo 차트 values (grafana-community/tempo, 차트 버전은 scripts/deploy-observability.ps1에서 고정)
+# Phase 3-B ⑤: 데모 차트 내장 Jaeger(메모리 저장)를 대신하는 트레이스 저장소.
+# 단일 바이너리(monolithic) 모드. Tempo 3.x는 ingester·compactor 대신 live-store·backend worker를 쓰고, 이 모드에서는 Kafka가 필요 없다.
+
+# 서비스 이름을 tempo로 고정 (Collector exporter, Grafana 데이터소스가 tempo.monitoring으로 찾는다)
+fullnameOverride: tempo
+
+# 관측 도구는 monitoring 노드그룹 전용 taint를 견디고 그 노드로만 간다 (otel-demo.yaml과 같은 규칙)
+nodeSelector:
+  role: monitoring
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: monitoring
+    effect: NoSchedule
+
+tempo:
+  # 사용 통계를 Grafana Labs로 보내지 않는다
+  reportingEnabled: false
+  # 클러스터를 작업할 때만 띄우므로 짧게. 노드 디스크(emptyDir)를 아끼기 위해 12시간
+  retention: 12h
+  # Collector는 OTLP gRPC(4317)로 보낸다. 차트 기본 Jaeger 수신기는 서비스 템플릿이 값을 직접 참조해
+  # null로 지우면 렌더링이 실패하므로 그대로 둔다 (클러스터 내부 ClusterIP라 외부 노출 없음)
+  # 서비스 그래프 지표(traces_service_graph_*)만 만들어 kps Prometheus에 remote write한다.
+  # Grafana 서비스 맵이 이 지표를 쓴다. span 지표는 Collector span_metrics가 이미 만들므로 켜지 않는다
+  metricsGenerator:
+    enabled: true
+    remoteWriteUrl: http://kps-prometheus:9090/api/v1/write
+    # 차트 기본값(/tmp/tempo)은 크기 제한 없는 emptyDir라, 3Gi 제한이 걸린 데이터 볼륨 안으로 옮긴다 (PR #10 리뷰)
+    storage:
+      path: /var/tempo/metrics
+  overrides:
+    defaults:
+      metrics_generator:
+        processors:
+          - service-graphs
+  # 처음 1Gi 제한으로 배포했다가 12분 만에 OOMKilled (재시작 직후 841Mi, 조회가 겹치면 초과).
+  # 데모 트래픽에서 live-store가 최근 트레이스를 메모리에 들고 있어 2Gi로 올린다
+  resources:
+    requests:
+      cpu: 50m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  # Go 런타임이 이 값에 가까워지면 GC를 더 자주 돌려 컨테이너 제한(2Gi)에 닿기 전에 메모리를 회수한다 (제한의 80%)
+  extraEnv:
+    - name: GOMEMLIMIT
+      value: 1638MiB
+  # 블록·WAL을 emptyDir에 둔다 (Prometheus와 같은 결정: 클러스터와 함께 사라져도 되는 데이터).
+  # 차트는 persistence를 끄면 볼륨 없이 컨테이너 쓰기 계층에 저장하므로 크기 제한을 걸 수 있게 명시한다.
+  extraVolumeMounts:
+    - name: tempo-data
+      mountPath: /var/tempo
+
+extraVolumes:
+  - name: tempo-data
+    emptyDir:
+      sizeLimit: 3Gi
+
+# kube-prometheus-stack Prometheus가 Tempo 자체 메트릭을 수집한다 (릴리스 라벨이 없어도 수집하도록 kps에서 설정함)
+serviceMonitor:
+  enabled: true
