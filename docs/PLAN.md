@@ -141,10 +141,12 @@
   - OBS-3 (#3): `frontend-web` 데이터에서 `k8s.*`, `container.*`, `host.name`, `service.instance.id` 제거 → 50/50 → 0/50
   - OBS-6 (#4): ALB 헬스체크를 Envoy 관리 포트 `10000`의 `/ready`로 옮김 (Collector 필터는 스팬 단위라 고아 스팬이 남아 제외) → frontend-proxy 트레이스 중 261/500 → 0/500
   - 집계 스크립트: `scripts/check-resource-attributes.ps1`
-- [ ] ② 앱 파드 정보 주입 (브랜치 예: `obs/obs-2-pod-metadata`)
-  - OBS-2 (#2): cart, quote, accounting에 Downward API로 파드 UID·IP를 넣어 `k8s_attributes` 매칭을 확실하게 함
+- [x] ② OBS-2 파드 메타데이터 (브랜치 `obs/obs-2-pod-metadata`, 2026-10-30)
+  - OBS-2 (#2): 잘못된 `container.id`가 파드 샌드박스 ID임을 확인. 처음 계획한 Downward API 주입은 `k8s_attributes`가 첫 규칙(`container.id`)에서 멈춰 효과가 없어, Collector에서 매칭 전에 지우고 쿠버네티스 API 값으로 다시 채움 → cart·quote·accounting `k8s.pod.name` 0 → 전부
+  - 앱 파드 재시작 없음
 - OBS-5는 데모 코드의 계측 방식 문제라 기록만 유지
-- **완료 기준**: Jaeger에서 수정 전과 같은 방식으로 집계해, 모든 서버 서비스에 `k8s.pod.name`이 붙고 `frontend-web`에는 없으며 `host.name`이 Collector 파드 이름이 아님을 확인. 결과를 observability-findings.md에 기록
+- OBS-7 (#6)(init 컨테이너가 있는 파드에 컨테이너 단위 속성 없음)은 ② 검증 중 발견. 파드·노드 단위 분석에는 영향이 없어 기록만 하고 필요할 때 처리
+- **완료 기준**: Jaeger에서 수정 전과 같은 방식으로 집계해, 모든 서버 서비스에 `k8s.pod.name`이 붙고 `frontend-web`에는 없으며 `host.name`이 Collector 파드 이름이 아님을 확인. 결과를 observability-findings.md에 기록 ✅ (2026-10-30)
 
 **3-A를 먼저 하는 이유**
 - Prometheus는 `host.name`, `k8s.pod.name` 등 리소스 속성을 **메트릭 라벨로 승격**한다. 잘못된 값이 대시보드·알림 규칙에 굳기 전에 바로잡는다.

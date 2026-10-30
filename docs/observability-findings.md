@@ -6,11 +6,12 @@ Phase 2에서 데모를 차트 기본 구성으로 배포한 뒤, Jaeger 트레�
 | ID | 문제 | 영향 | 상태 |
 |---|---|---|---|
 | OBS-1 | 모든 스팬의 `host.name`이 앱이 아닌 Collector 파드 이름으로 덮어써짐 | 실행 위치 판단 오류 | **해결** (2026-10-30, #1) |
-| OBS-2 | quote, cart, accounting 스팬에 쿠버네티스 메타데이터(`k8s.*`)가 붙지 않음 | 파드·노드 단위 장애 분석 불가 | 미해결 (Phase 3-A ②, #2) |
+| OBS-2 | quote, cart, accounting 스팬에 쿠버네티스 메타데이터(`k8s.*`)가 붙지 않음 | 파드·노드 단위 장애 분석 불가 | **해결** (2026-10-30, #2) |
 | OBS-3 | 브라우저(`frontend-web`) 스팬에 frontend-proxy 파드의 메타데이터가 붙음 | 브라우저 데이터를 서버 파드로 오인 | **해결** (2026-10-30, #3) |
 | OBS-4 | 실제 사용자 브라우저의 트레이스가 수집되지 않음 (전송 주소가 `localhost:8080`) | 사용자 체감 지연과 브라우저 구간 관측 불가 | **해결** (2026-10-30) |
 | OBS-5 | accounting의 `order-consumed` 스팬이 메시지 대기 시간까지 포함해 55분짜리로 기록됨 | 소요 시간 통계 왜곡, 트레이스 화면 축이 비정상적으로 길어짐 | 기록만 (데모 코드 영역) |
 | OBS-6 | ALB 헬스체크가 15초마다 frontend-proxy → frontend 트레이스를 만듦 | 실제 트래픽 트레이스가 묻히고 요청 수·지연 지표 왜곡 | **해결** (2026-10-30, #4) |
+| OBS-7 | init 컨테이너가 있는 파드의 서비스에 컨테이너 단위 속성(`k8s.container.name`, `container.id`, `container.image.*`)이 없음 | 컨테이너 재시작·이미지 버전 단위 분석 불가 | 미해결 (#6) |
 
 환경: 차트 `opentelemetry-demo` 0.42.6 (앱 3.1.0), Collector는 DaemonSet 모드(노드마다 1개), 확인일 2026-10-29
 
@@ -53,7 +54,7 @@ resource_detection:
 
 ---
 
-## OBS-2. quote, cart 스팬에 쿠버네티스 메타데이터가 없음
+## OBS-2. quote, cart, accounting 스팬에 쿠버네티스 메타데이터가 없음
 
 ### 증상
 최근 1시간 트레이스를 서비스별로 집계한 결과:
@@ -96,9 +97,34 @@ pod_association:
 - quote, cart 장애 시 "어느 파드, 어느 노드에서 발생했나"를 텔레메트리만으로 판단할 수 없다.
 - cart는 장바구니 경로라 Phase 5 시나리오(cartFailure 등)에 직접 영향이 있다.
 
-### 해결 방향
-1. (권장) 쿠버네티스 Downward API로 각 앱에 자기 파드 UID와 IP를 환경변수로 주입하고 `OTEL_RESOURCE_ATTRIBUTES`에 `k8s.pod.uid`, `k8s.pod.ip`를 넣는다. 감지 방식에 의존하지 않는 확실한 매칭이 된다.
-2. 또는 `pod_association`에서 `container.id` 규칙을 빼거나 마지막으로 옮긴다.
+### 해결 방향 (처음 기록, 아래에서 정정)
+1. ~~(권장) 쿠버네티스 Downward API로 각 앱에 자기 파드 UID와 IP를 환경변수로 주입하고 `OTEL_RESOURCE_ATTRIBUTES`에 `k8s.pod.uid`, `k8s.pod.ip`를 넣는다.~~ → **효과 없음.** `k8s_attributes`는 값이 있는 첫 규칙 하나로만 찾으므로, 앞 순서의 `container.id` 규칙에 먼저 걸려 결과가 같다.
+2. ~~`pod_association`에서 `container.id` 규칙을 빼거나 마지막으로 옮긴다.~~ → **values로 불가.** 차트가 profiles 파이프라인이 있으면 `container.id` 규칙을 맨 앞에 강제로 넣는다(`charts/opentelemetry-collector/templates/_config.tpl`의 `applyKubernetesAttributesConfig`). eBPF 프로파일러가 보내는 올바른 `container.id`로 매칭하기 위한 것이다.
+
+### 원인 확정 (2026-10-30, Phase 3-A ②)
+잘못된 `container.id`는 **파드 샌드박스(pause 컨테이너) ID**다.
+```
+cart 파드의 /proc/self/mountinfo
+  /var/lib/containerd/io.containerd.grpc.v1.cri/sandboxes/3f004740d2ee…/hostname  /etc/hostname
+cart 파드의 /proc/self/cgroup
+  0::/
+```
+- 노드가 cgroup v2라 `/proc/self/cgroup`에 컨테이너 ID가 없다. SDK의 컨테이너 감지기는 다음 수단으로 mountinfo의 `/etc/hostname` 경로에서 ID를 뽑는데, containerd는 이 파일을 **샌드박스 디렉터리**에 둔다.
+- cart(`3f004740…`), accounting(`a4792d4f…`), quote(`d572de6d…`) 모두 자기 파드의 샌드박스 ID와 일치했다.
+- `container.id`를 보내는 서비스는 이 세 개뿐이고(Jaeger 20개 서비스 확인), 모두 틀린 값이다.
+
+### 해결 (2026-10-30, #2)
+앱은 그대로 두고 Collector에서 처리했다(`helm/values/otel-demo.yaml`).
+- `transform/drop_sdk_container_id`: 앱이 보낸 데이터(`service.name`이 있는 것)의 `container.id`를 지운다. traces·metrics·logs 파이프라인에서 `k8s_attributes` **앞**에 둔다. 값이 없으므로 `container.id` 규칙을 건너뛰고 연결 IP 규칙으로 파드를 찾는다.
+  - k8s_cluster 수신기가 만든 메트릭(service.name 없음)과 profiles 파이프라인의 올바른 `container.id`는 건드리지 않는다.
+- `k8s_attributes.extract.metadata`에 `container.id`를 추가해 쿠버네티스 API의 올바른 값을 채운다.
+
+결과 (11:51 이후 load-generator 3분):
+| 서비스 | k8s.pod.name 수정 전 | 수정 후 | container.id |
+|---|---|---|---|
+| cart | 0 / 50 | **50 / 50** | 없음 (OBS-7) |
+| quote | 0 / 4 | **37 / 37** | `eb150d6d…` = 실제 컨테이너 ID |
+| accounting | 0 / 3 | **10 / 10** | 없음 (OBS-7) |
 
 ---
 
@@ -227,6 +253,25 @@ accounting [internal] order-consumed   시작 09:23:18.827   소요 3,303,176ms 
 
 ---
 
+## OBS-7. init 컨테이너가 있는 파드에 컨테이너 단위 속성이 없음
+
+### 증상 (2026-10-30, OBS-2 수정 후 확인)
+- cart, accounting, checkout 스팬에 `k8s.pod.name` 등 파드 단위 속성은 있지만 `k8s.container.name`, `container.id`, `container.image.name/tag`는 없다.
+- 같은 시점 quote, frontend(컨테이너 1개, init 컨테이너 없음)에는 모두 있고 `container.id`도 실제 값과 일치한다.
+- init 컨테이너(또는 컨테이너 여러 개)가 있는 Deployment: accounting, cart, checkout, flagd, fraud-detection, product-catalog, shipping (grafana 제외)
+
+### 원인 (추정)
+- `k8s_attributes`는 파드는 찾았지만 **파드 안의 어느 컨테이너**가 보낸 데이터인지 알아야 컨테이너 단위 속성을 붙인다. 앱이 `k8s.container.name`을 보내지 않으면, 컨테이너가 하나뿐인 파드에서만 자동으로 정한다.
+- init 컨테이너(`wait-for-kafka`, `wait-for-valkey-cart` 등)도 컨테이너 수에 포함되어 하나로 정하지 못하는 것으로 본다. **init 컨테이너 유무와 증상의 일치는 확인, 프로세서 내부 판단 로직은 미확인.**
+
+### 영향
+- 이미지 버전(`container.image.tag`)이나 컨테이너 재시작 단위로 텔레메트리를 나눌 수 없다. 파드·노드 단위 분석은 가능하다.
+
+### 해결 방향
+- 해당 서비스에 `OTEL_RESOURCE_ATTRIBUTES`로 `k8s.container.name=<컨테이너 이름>`을 넣는다(값이 고정이라 Downward API 불필요). 앱 파드 재시작이 필요해 별도 작업으로 한다.
+
+---
+
 ## 검증 방법 (수정 후 재확인)
 ```powershell
 # 서비스별 k8s.pod.name 부착 여부, host.name이 Collector 파드 이름인지, 헬스체크 트레이스 수 집계 (Jaeger API)
@@ -244,3 +289,8 @@ accounting [internal] order-consumed   시작 09:23:18.827   소요 3,303,176ms 
 | `frontend-web`에 `k8s.pod.name` | 50 / 50 | **0** / 50 |
 | `k8s.pod.name` 없는 서버 서비스 | cart, quote, accounting | cart, quote, accounting (OBS-2, ② 대상) |
 | frontend-proxy 트레이스 중 헬스체크 | 261 / 500 | **0** / 500 |
+
+### Phase 3-A ② 결과 (2026-10-30, 11:51 이후 load-generator 3분)
+- `k8s.pod.name` 없는 서버 서비스: **0개** (cart 50/50, quote 37/37, accounting 10/10)
+- ①의 결과 유지: host=collector 0, `frontend-web` k8s 0/50, 헬스체크 0/500
+- **Phase 3-A 완료 기준 충족**: 모든 서버 서비스에 `k8s.pod.name`, `frontend-web`에는 없음, `host.name`이 Collector 파드 이름 아님

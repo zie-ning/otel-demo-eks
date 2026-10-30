@@ -50,6 +50,51 @@ opentelemetry-collector:
   # 차트 기본 설정 위에 덮어쓴다. 목록(배열)은 병합되지 않고 통째로 바뀌므로 기존 항목도 다시 적는다.
   config:
     processors:
+      # OBS-2 (#2): cart(.NET), accounting(.NET), quote(PHP) SDK가 보내는 container.id는 실제 컨테이너가 아니라
+      # 파드 샌드박스 ID다. containerd + cgroup v2 환경이라 /proc/self/cgroup에 ID가 없어서
+      # mountinfo의 /etc/hostname 경로(.../sandboxes/<ID>/hostname)를 읽는다.
+      # k8s_attributes는 값이 있는 첫 매칭 규칙(container.id) 하나로만 파드를 찾고, 이 값으로는 파드가 없어
+      # 메타데이터 없이 통과한다. 그래서 매칭 전에 지운다. profiles 파이프라인(eBPF 프로파일러가 보내는 올바른 값)에는 넣지 않는다.
+      # 앱이 보낸 데이터(service.name 있음)만 지운다. k8s_cluster 등 수신기가 만든 올바른 container.id는 유지한다.
+      transform/drop_sdk_container_id:
+        error_mode: ignore
+        trace_statements: &dropSdkContainerIdStatements
+          - context: resource
+            statements:
+              - delete_key(attributes, "container.id") where attributes["service.name"] != nil
+        metric_statements: *dropSdkContainerIdStatements
+        log_statements: *dropSdkContainerIdStatements
+      k8s_attributes:
+        extract:
+          # 차트 기본 목록에 container.id만 추가: 쿠버네티스 API의 올바른 컨테이너 ID를 채운다
+          metadata:
+            - k8s.namespace.name
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.node.name
+            - k8s.pod.start_time
+            - k8s.deployment.name
+            - k8s.replicaset.name
+            - k8s.replicaset.uid
+            - k8s.daemonset.name
+            - k8s.daemonset.uid
+            - k8s.job.name
+            - k8s.job.uid
+            - k8s.container.name
+            - k8s.cronjob.name
+            - k8s.statefulset.name
+            - k8s.statefulset.uid
+            - container.image.tag
+            - container.image.name
+            - container.id
+            - k8s.cluster.uid
+            - service.namespace
+            - service.name
+            - service.version
+            - service.instance.id
+        # pod_association은 바꾸지 않는다. 차트가 profiles 파이프라인용으로 container.id 규칙을 맨 앞에 강제로 넣고,
+        # k8s_attributes는 값이 있는 첫 규칙 하나로만 찾는다. 앱 데이터는 위 transform에서 container.id를 지웠으므로
+        # 이 규칙을 건너뛰고 다음 규칙(연결 IP)으로 파드를 찾는다.
       # OBS-1 (#1): system 감지기가 host.name을 Collector 파드 이름으로 덮어써서 뺀다.
       resource_detection:
         detectors: [env]
@@ -80,8 +125,11 @@ opentelemetry-collector:
     service:
       pipelines:
         traces:
-          # 차트 기본 순서에 transform/browser_resource만 추가 (resource 뒤에 둬야 host.name 등이 다시 붙지 않는다)
+          # 차트 기본 순서에 추가한 것:
+          # - transform/drop_sdk_container_id: k8s_attributes 앞 (OBS-2)
+          # - transform/browser_resource: resource 뒤에 둬야 host.name 등이 다시 붙지 않는다 (OBS-3)
           processors:
+            - transform/drop_sdk_container_id
             - k8s_attributes
             - memory_limiter
             - resource_detection
@@ -92,13 +140,24 @@ opentelemetry-collector:
             - transform/redact_sensitive_data
             - redaction
         metrics:
-          # 차트 기본 순서에 transform/browser_resource만 추가 (span_metrics로 만든 브라우저 메트릭 처리)
+          # 차트 기본 순서에 transform/drop_sdk_container_id(OBS-2),
+          # transform/browser_resource(span_metrics로 만든 브라우저 메트릭 처리, OBS-3) 추가
           processors:
+            - transform/drop_sdk_container_id
             - k8s_attributes
             - memory_limiter
             - resource_detection
             - resource
             - transform/browser_resource
+        logs:
+          # 차트 기본 순서에 transform/drop_sdk_container_id만 추가 (OBS-2, 앱 로그도 같은 문제)
+          processors:
+            - transform/drop_sdk_container_id
+            - k8s_attributes
+            - memory_limiter
+            - resource_detection
+            - resource
+            - transform/sanitize_logs
 
 # 관측 도구는 monitoring 노드그룹 전용 taint를 견디고 그 노드로만 간다.
 # 같은 규칙을 아래 하위 차트에서 YAML 앵커로 재사용한다.
