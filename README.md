@@ -47,8 +47,8 @@
 - [x] Phase 1. 인프라 (VPC, EKS, 노드그룹 app/monitoring, LB Controller, metrics-server)
 - [x] Phase 2. 데모 배포 (Helm, ALB 외부 접속, 화면 동작별 트레이스 관찰, 관측 데이터 품질 문제 OBS-1~5 기록)
 - [x] Phase 3. 관측 데이터 품질 수정(OBS-1~3, 6), 관측 스택 전환(kube-prometheus-stack·Tempo·Loki), Grafana에서 지표 → 트레이스 → 로그 연결
-- [ ] Phase 4. SLO와 알림
-- [ ] Phase 5. 장애 주입 시나리오
+- [ ] Phase 4. SLO와 기준선 알림
+- [ ] Phase 5. 장애 주입 시나리오와 알림 개선
 - [ ] Phase 6. 문서화
 
 ## 부트스트랩 사용법
