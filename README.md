@@ -27,6 +27,7 @@
 ├── scripts/
 │   ├── up.ps1              # 클러스터 + 애드온 생성
 │   ├── deploy-demo.ps1     # OpenTelemetry Demo 설치/업그레이드
+│   ├── check-resource-attributes.ps1  # 서비스별 리소스 속성 품질 집계 (Jaeger API)
 │   └── down.ps1            # ALB 정리 후 전체 삭제
 └── terraform/
     ├── 00-bootstrap/       # Terraform state용 S3 버킷, AWS Budgets 알림 (영구)
