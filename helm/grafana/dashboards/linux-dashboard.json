@@ -1251,7 +1251,7 @@
             "uid": "fej9ntb4ninswf"
           },
           "editorMode": "code",
-          "expr": "sum (irate(system_cpu_time_seconds_total{kk8s_cluster_name=~\"$k8s_cluster_name\", k8s_node_name=~\"${node_name}\", host_name=~\"$host_name\", state=\"user\"}[$__rate_interval])) \n/ \nsum ((irate(system_cpu_time_seconds_total{k8s_cluster_name=~\"$k8s_cluster_name\", k8s_node_name=~\"${node_name}\", host_name=~\"$host_name\"}[$__rate_interval])))",
+          "expr": "sum (irate(system_cpu_time_seconds_total{k8s_cluster_name=~\"$k8s_cluster_name\", k8s_node_name=~\"${node_name}\", host_name=~\"$host_name\", state=\"user\"}[$__rate_interval])) \n/ \nsum ((irate(system_cpu_time_seconds_total{k8s_cluster_name=~\"$k8s_cluster_name\", k8s_node_name=~\"${node_name}\", host_name=~\"$host_name\"}[$__rate_interval])))",
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,
@@ -2400,11 +2400,11 @@
               "Trend #receive": "Receive",
               "Trend #receive_bytes": "Receive",
               "Trend #receive_dropped_packets": "Receive dropped",
-              "Trend #receive_errors": "Transmit err",
+              "Trend #receive_errors": "Receive err",
               "Trend #transmit": "Transmit",
               "Trend #transmit_bytes": "Transmit",
               "Trend #transmit_dropped_packets": "Transmit dropped",
-              "Trend #transmit_errors": "Receive err",
+              "Trend #transmit_errors": "Transmit err",
               "device": "Interface"
             }
           }

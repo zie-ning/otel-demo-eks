@@ -8,6 +8,7 @@
 ## 구성
 
 ### 스택 분리
+
 | 스택 | 내용 | state |
 |---|---|---|
 | `terraform/01-cluster` | VPC, EKS, 노드그룹, 코어 애드온 | S3 `01-cluster/terraform.tfstate` |
@@ -16,6 +17,7 @@
 같은 apply에서 클러스터 생성과 Helm 설치를 함께 하면 Helm/Kubernetes provider가 아직 없는 클러스터 정보로 초기화되는 문제가 있어 둘로 나눴다. `02-addons`는 `01-cluster`의 출력값을 S3 state에서 읽는다.
 
 ### 버전
+
 | 대상 | 버전 |
 |---|---|
 | terraform-aws-modules/vpc | 6.7.3 |
@@ -36,6 +38,7 @@
 - 애드온: vpc-cni, eks-pod-identity-agent(노드보다 먼저 설치), kube-proxy, coredns
 
 ### 노드그룹
+
 | 노드그룹 | 타입 × 수 | 라벨 / taint |
 |---|---|---|
 | app | m7i-flex.large × 2 | `role=app` |

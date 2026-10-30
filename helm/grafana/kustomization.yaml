@@ -3,7 +3,8 @@
 # 원본: opentelemetry-demo 차트 0.42.6의 grafana/provisioning (Apache-2.0, The OpenTelemetry Authors)
 # 데모 차트의 내장 Grafana를 끄면 원본 ConfigMap도 사라지므로 저장소로 옮겨 관리한다.
 # 원본에서 바꾼 것: cart-service-alerting.yml의 알림 수신처(grafana-default-email → kps-alertmanager),
-# contact-points.yml 추가
+# contact-points.yml 추가, 원본 대시보드 버그 수정(PR #8 리뷰): linux-dashboard의 라벨 오타 kk8s_cluster_name과
+# 뒤바뀐 수신/송신 에러 열 이름, postgresql-dashboard의 라벨 오타 dpostgresql_database_name
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: monitoring

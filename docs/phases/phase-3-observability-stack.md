@@ -48,6 +48,7 @@ Jaeger에서 같은 방식으로 집계해 모든 서버 서비스에 `k8s.pod.n
 ## 3-B. 관측 스택 전환
 
 ### 공통 결정 (2026-10-30)
+
 | 항목 | 결정 | 근거 |
 |---|---|---|
 | 설치 방식 | `scripts/deploy-observability.ps1`로 Helm 직접 설치, values는 `helm/values/`에 Git 관리 | 데모 배포와 같은 방식. 수정·재배포가 빠름 |
@@ -74,6 +75,7 @@ kube-prometheus-stack을 고른 이유: 내장 Prometheus도 Alertmanager·kube-
 - Collector가 내장 Prometheus와 kps Prometheus에 **병행 전송**해 비교
 
 비교 결과 (load-generator 3분)
+
 | 항목 | 내장 | kps |
 |---|---|---|
 | OTLP 메트릭 이름 | 417 | 417 (차이 0) |
@@ -96,6 +98,7 @@ kube-prometheus-stack을 고른 이유: 내장 Prometheus도 Alertmanager·kube-
 - 내장 Prometheus·Grafana 비활성화, Collector 메트릭은 kps로만 전송
 
 검증 결과
+
 | 항목 | 결과 |
 |---|---|
 | ALB 경유 `/grafana/` | 200 |

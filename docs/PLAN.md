@@ -158,6 +158,7 @@ Phase별 목표·상태·핵심 결과만 적는다. 진행 과정, 수치, 문�
 - **완료 기준**: 의도적으로 에러를 내면 알림이 실제로 도착
 
 ### Phase 5. 장애 주입 시나리오
+
 | # | 시나리오 | 주입 방법 | 보여줄 포인트 |
 |---|---|---|---|
 | 1 | 결제 실패율 증가 | flagd `paymentFailure` | SLO 알림 → 트레이스로 원인 서비스 특정 |
@@ -186,7 +187,7 @@ Phase별 목표·상태·핵심 결과만 적는다. 진행 과정, 수치, 문�
 | kps와 Collector의 인프라 지표 중복 수집 | 한쪽으로 정리 / 둘 다 유지 | Phase 3 ⑦ 이후 |
 | GitOps(Argo CD) 전환 | 선택 과제 | Phase 6 이후 |
 
-정해진 사항: Terraform state는 **S3** (Phase 0), 저장소는 **GitHub 공개** (Phase 0), 노드는 m7i-flex.large × 3 유지 (Phase 3 ④ 기준 monitoring 노드 CPU requests 72%)
+정해진 사항: Terraform state는 **S3** (Phase 0), 저장소는 **GitHub 공개** (Phase 0), 노드는 m7i-flex.large × 3 유지 (근거 수치는 [Phase 3 상세](phases/phase-3-observability-stack.md))
 
 ### 저장소 구조 (✅ 생성됨 / 예정)
 ```

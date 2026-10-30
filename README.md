@@ -44,7 +44,7 @@
 - [x] Phase 0. 사전 준비 (도구, 자격 증명, state 버킷, 예산 알림)
 - [x] Phase 1. 인프라 (VPC, EKS, 노드그룹 app/monitoring, LB Controller, metrics-server)
 - [x] Phase 2. 데모 배포 (Helm, ALB 외부 접속, 화면 동작별 트레이스 관찰, 관측 데이터 품질 문제 OBS-1~5 기록)
-- [ ] Phase 3. 관측 스택 전환 (3-A 관측 데이터 품질 수정 완료, 3-B kube-prometheus-stack·Grafana 일원화 완료)
+- [ ] Phase 3. 관측 스택 전환 (3-A 관측 데이터 품질 수정 완료, 3-B ③④ kube-prometheus-stack·Grafana 일원화 완료, ⑤~⑦ 진행 예정)
 - [ ] Phase 4. SLO와 알림
 - [ ] Phase 5. 장애 주입 시나리오
 - [ ] Phase 6. 문서화

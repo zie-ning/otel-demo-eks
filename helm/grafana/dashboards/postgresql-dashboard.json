@@ -445,7 +445,7 @@
           },
           "dsType": "prometheus",
           "editorMode": "code",
-          "expr": "sum(irate(postgresql_tup_updated_total{dpostgresql_database_name=~\"$db\",k8s_cluster_name=~\"$k8s_cluster_name\", k8s_statefulset_name=~\"$k8s_statefulset_name\",host_name=~\"$host_name\"}[$__rate_interval]))",
+          "expr": "sum(irate(postgresql_tup_updated_total{postgresql_database_name=~\"$db\",k8s_cluster_name=~\"$k8s_cluster_name\", k8s_statefulset_name=~\"$k8s_statefulset_name\",host_name=~\"$host_name\"}[$__rate_interval]))",
           "format": "time_series",
           "groupBy": [
             {

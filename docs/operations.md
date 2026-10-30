@@ -20,6 +20,7 @@
 `02-addons`는 `01-cluster`의 출력값(클러스터 이름, VPC ID)을 S3 state에서 읽는다. 그래서 `01-cluster`가 먼저 있어야 한다.
 
 ### 노드그룹
+
 | 노드그룹 | 타입 × 수 | 라벨 / taint | 용도 |
 |---|---|---|---|
 | app | m7i-flex.large × 2 | `role=app` | OTel Demo 서비스, 시스템 파드 |
