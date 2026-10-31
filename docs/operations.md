@@ -63,6 +63,19 @@
 - Prometheus·Alertmanager·Tempo·Loki는 외부에 노출하지 않는다. Grafana 데이터소스로 조회하고, API가 필요하면 `kubectl port-forward -n monitoring svc/kps-prometheus 9090`(Tempo `svc/tempo 3200`, Loki `svc/loki 3100`)
 - Grafana 데이터소스 uid: `webstore-metrics`(Prometheus), `webstore-traces`(Tempo), `webstore-logs`(Loki). 데모 대시보드가 이 uid를 참조하므로 바꾸지 않는다.
 
+### 알림 채널 (Slack)
+Alertmanager가 `severity`별로 Slack 채널에 보낸다: `critical` → `#alerts-critical`, `warning` → `#alerts-warning`. `Watchdog`·`InfoInhibitor`와 severity가 없거나 `info`인 알림은 보내지 않는다(라우팅: `helm/values/kube-prometheus-stack.yaml`의 `alertmanager.config`).
+
+- 웹훅 URL은 `helm/values/slack-webhooks.local.yaml`(커밋 안 함)에 둔다. **이 파일이 없으면 `deploy-observability.ps1`이 멈춘다.** 클러스터를 다시 만들어도 파일은 그대로 쓴다.
+  ```yaml
+  critical: https://hooks.slack.com/services/...
+  warning: https://hooks.slack.com/services/...
+  ```
+- 웹훅 만들기: https://api.slack.com/apps → Create New App(From scratch, 워크스페이스 선택) → Incoming Webhooks 켜기 → 채널별로 Add New Webhook. 워크스페이스는 앱을 만들 때 정해지고 바꿀 수 없다.
+- 스크립트가 파일을 읽어 Secret `alertmanager-slack`을 매번 갱신하고(값은 출력하지 않음), Alertmanager가 이 Secret을 `/etc/alertmanager/secrets/alertmanager-slack/`에 마운트해 `api_url_file`로 읽는다. URL은 values나 Helm 릴리스 기록에 남지 않는다.
+- 설정을 바꾸기 전에 렌더링한 설정을 실행 중인 파드의 `amtool check-config`로 검사할 수 있다. 루트 파일 시스템이 읽기 전용이라 `/alertmanager/`(데이터 디렉터리)에 임시로 쓴다.
+- 지금 들어온 알림: `kubectl exec -n monitoring alertmanager-kps-alertmanager-0 -c alertmanager -- amtool alert query --alertmanager.url=http://localhost:9093`
+
 ### 데모 배포
 ```powershell
 .\scripts\deploy-demo.ps1            # 설치/업그레이드 (차트 버전 고정, 모든 파드 Ready까지 대기)
@@ -205,6 +218,10 @@ helm uninstall otel-demo -n otel-demo --wait
 원인: `$approve = if (...) { @('-auto-approve') } else { @() }`처럼 `if` 식의 결과를 그대로 받으면, 요소 1개짜리 배열이 **문자열 하나로 풀린다.** 문자열을 `@approve`로 펼치면 글자 단위로 쪼개져 `- a u t o - a p p r o v e`가 전달된다.
 
 해결: `$approve = @(if ($AutoApprove) { '-auto-approve' })`로 항상 배열을 유지 (2026-10-30, up.ps1·down.ps1 모두 수정). 같은 실행에서 `kubectl -o jsonpath`의 큰따옴표가 깨지는 문제도 있어, LoadBalancer Service 조회를 `-o json` + PowerShell 필터로 바꿨다.
+
+### terraform plan `-out=up.tfplan`이 "Too many command line arguments"로 실패한다
+- 원인: Windows PowerShell 5.1이 따옴표 없는 `-out=up.tfplan`을 점에서 나눠 `-out=up`과 `.tfplan` 두 인자로 넘긴다 (2026-10-31, Phase 4에서 plan 파일을 만들다 발견).
+- 해결: `'-out=up.tfplan'`처럼 따옴표로 감싼다. 점이 들어간 `-옵션=값` 인자는 모두 같다.
 
 ### up.ps1에서 02-addons가 실패한다
 - `Error: Kubernetes cluster unreachable`: kubeconfig나 IP 허용 목록 문제다. 위의 IP 변경 항목을 확인한다.
