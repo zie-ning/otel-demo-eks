@@ -156,7 +156,7 @@ Phase별 목표·상태·핵심 결과만 적는다. 진행 과정, 수치, 문�
 🚧 진행 중 (2026-10-31 시작) · [상세](phases/phase-4-slo-alerts.md)
 
 장애 시나리오를 정하기 **전에** 사용자 영향(증상) 기준의 최소 알림만 둔다. 튜닝과 보강은 Phase 5에서 장애로 검증한 뒤에 한다.
-- [ ] SLO 2~3개 정의: 사용자 여정 기준 (예: 결제 성공률, frontend p95 지연). 특정 장애 원인에 맞춘 조건은 넣지 않는다
+- [x] SLO 정의: 쇼핑몰 가용성 99.5%, 주문 성공률 99%, 쇼핑몰 지연(400ms) 99% + 측정 유효성 알림 2개(요청률 급감, Collector 드롭)
 - [ ] PrometheusRule로 burn-rate 알림 작성
 - [x] Alertmanager → Slack 연결: 긴급도별 `#alerts-critical`/`#alerts-warning`, 테스트 알림 도착 확인
 - [ ] SLO 대시보드 (서비스별 RED는 데모 대시보드 활용)
@@ -196,11 +196,10 @@ Phase 4 기준선 알림을 **고치지 않은 상태로** 장애를 주입해, 
 | 항목 | 후보 | 결정 시점 |
 |---|---|---|
 | 장애 주입 도구 | flagd만 / Chaos Mesh 추가 | Phase 5 |
-| kps와 Collector의 인프라 지표 중복 수집 | 한쪽으로 정리 / 둘 다 유지 | Phase 4 (알림 규칙이 어느 쪽 지표를 쓸지 정할 때) |
-| monitoring 노드 메모리 limits 합 94% | 실사용 기준으로 limits 조정 / 그대로 | Phase 4 |
+| kps와 Collector의 인프라 지표 중복 수집 | kps로 일원화 / `k8s_cluster`만 끄기 / 둘 다 유지 | Phase 4 (조사 완료, [상세 ⓪-2](phases/phase-4-slo-alerts.md)) |
 | GitOps(Argo CD) 전환 | 선택 과제 | Phase 6 이후 |
 
-정해진 사항: Terraform state는 **S3** (Phase 0), 저장소는 **GitHub 공개** (Phase 0), 알림 채널은 **Slack** (Phase 4), 노드는 m7i-flex.large × 3 유지 (근거 수치는 [Phase 3 상세](phases/phase-3-observability-stack.md))
+정해진 사항: Terraform state는 **S3** (Phase 0), 저장소는 **GitHub 공개** (Phase 0), 알림 채널은 **Slack** (Phase 4), monitoring 노드 메모리는 limits가 아니라 **requests를 실사용에 맞춤** (Phase 4, [상세](phases/phase-4-slo-alerts.md)), 노드는 m7i-flex.large × 3 유지 (근거 수치는 [Phase 3 상세](phases/phase-3-observability-stack.md))
 
 ### 저장소 구조 (✅ 생성됨 / 예정)
 ```

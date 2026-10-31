@@ -58,10 +58,11 @@ grafana:
       enabled: true
       org_name: Main Org.
       org_role: Viewer
+  # Phase 4 ⓪ 실측: 본체 271Mi(requests 128Mi를 넘음). 노드 메모리 압박 때 먼저 쫓겨나지 않도록 실사용에 맞춘다
   resources:
     requests:
       cpu: 50m
-      memory: 128Mi
+      memory: 320Mi
     limits:
       memory: 512Mi
   sidecar:
@@ -73,11 +74,11 @@ grafana:
         grafana_folder: Kubernetes
       provider:
         foldersFromFilesStructure: true
-    # 대시보드·데이터소스·알림 사이드카 공통
+    # 대시보드·데이터소스·알림 사이드카 공통. Phase 4 ⓪ 실측 77~79Mi씩
     resources:
       requests:
         cpu: 10m
-        memory: 64Mi
+        memory: 96Mi
       limits:
         memory: 128Mi
     alerts:
@@ -181,10 +182,12 @@ prometheusOperator:
 prometheus:
   prometheusSpec:
     <<: *monitoringNode
+    # Phase 4 ⓪ 실측: 가동 1시간에 532Mi(requests 512Mi를 넘음). 시리즈가 쌓이면 더 늘어난다.
+    # SLO 알림을 평가하는 주체라 노드 메모리 압박 때 먼저 쫓겨나지 않게 여유를 둔다
     resources:
       requests:
         cpu: 100m
-        memory: 512Mi
+        memory: 768Mi
       limits:
         memory: 1536Mi
     # 클러스터를 작업할 때만 띄우므로 짧게. 저장소는 emptyDir(차트 기본, storageSpec 미지정)

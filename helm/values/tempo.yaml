@@ -36,10 +36,12 @@ tempo:
           - service-graphs
   # 처음 1Gi 제한으로 배포했다가 12분 만에 OOMKilled (재시작 직후 841Mi, 조회가 겹치면 초과).
   # 데모 트래픽에서 live-store가 최근 트레이스를 메모리에 들고 있어 2Gi로 올린다
+  # (Phase 4 ⓪에서 정정: live 트레이스는 1.7MB뿐이었다. GOGC=100으로 힙이 2배까지 자라는 것과 블록 생성·압축이 더 크다)
+  # Phase 4 ⓪ 실측: 평소 200~460Mi, 1시간 최대 863Mi. requests를 평소 사용량 위로 올린다
   resources:
     requests:
       cpu: 50m
-      memory: 512Mi
+      memory: 768Mi
     limits:
       memory: 2Gi
   # Go 런타임이 이 값에 가까워지면 GC를 더 자주 돌려 컨테이너 제한(2Gi)에 닿기 전에 메모리를 회수한다 (제한의 80%)

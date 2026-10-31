@@ -54,6 +54,14 @@ opentelemetry-collector:
       value: monitoring
       effect: NoSchedule
 
+  # 차트 기본값은 limits 400Mi만 있어 requests도 400Mi가 된다. 실사용은 89Mi(Phase 4 ⓪)라 예약만 하고 쓰지 않는다.
+  # DaemonSet이라 모든 노드에서 같은 양을 예약한다. memory_limiter가 limits의 80%를 기준으로 동작하므로 limits는 그대로 둔다
+  resources:
+    requests:
+      memory: 160Mi
+    limits:
+      memory: 400Mi
+
   # 차트 기본 설정 위에 덮어쓴다. 목록(배열)은 병합되지 않고 통째로 바뀌므로 기존 항목도 다시 적는다.
   config:
     exporters:
@@ -89,6 +97,13 @@ opentelemetry-collector:
       span_metrics:
         exemplars:
           enabled: true
+        # Phase 4 ①: SLI를 "frontend-proxy가 쇼핑몰로 보낸 요청"으로 정의하기 위한 라벨.
+        # Envoy 스팬의 span_name은 GET/POST뿐이라 어느 백엔드로 갔는지(upstream_cluster)와 응답 코드(http.status_code)로 나눈다.
+        # 예: flagd 스트리밍(upstream_cluster=flagservice)은 3초씩 열려 있어 지연 SLI에서 빼야 한다.
+        # 속성이 없는 스팬에는 라벨이 붙지 않는다. Prometheus 라벨 이름은 upstream_cluster, http_status_code
+        dimensions:
+          - name: upstream_cluster
+          - name: http.status_code
     processors:
       # OBS-2 (#2): cart(.NET), accounting(.NET), quote(PHP) SDK가 보내는 container.id는 실제 컨테이너가 아니라
       # 파드 샌드박스 ID다. containerd + cgroup v2 환경이라 /proc/self/cgroup에 ID가 없어서

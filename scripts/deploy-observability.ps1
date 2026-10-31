@@ -13,6 +13,7 @@ $KpsRelease      = 'kube-prometheus-stack'
 $KpsValues       = Join-Path $Root 'helm\values\kube-prometheus-stack.yaml'
 $GrafanaDir      = Join-Path $Root 'helm\grafana'
 $GrafanaSecret   = 'grafana-admin'
+$AlertsDir       = Join-Path $Root 'observability\alerts'
 $SlackSecret     = 'alertmanager-slack'
 $SlackWebhooks   = Join-Path $Root 'helm\values\slack-webhooks.local.yaml'
 
@@ -123,6 +124,10 @@ Invoke-Native 'Loki 설치/업그레이드' {
 # 대시보드 ConfigMap이 커서(약 470KB) 클라이언트 측 apply의 last-applied 주석 한도(256KB)를 넘으므로 server-side로 적용한다
 Invoke-Native '데모 대시보드·알림 ConfigMap 적용' {
     & $Kubectl apply -k $GrafanaDir --server-side --force-conflicts
+}
+# Phase 4 기준선 알림(SLO burn rate, 측정 유효성). kps Prometheus가 릴리스 라벨 없이도 읽는다
+Invoke-Native 'SLO·기준선 알림 규칙(PrometheusRule) 적용' {
+    & $Kubectl apply -f $AlertsDir
 }
 Invoke-Native '파드 상태' { & $Kubectl get pods -n $Namespace -o wide }
 Write-Host "`nGrafana admin 비밀번호 확인: docs/operations.md의 '관측 스택 배포' 참고" -ForegroundColor Yellow

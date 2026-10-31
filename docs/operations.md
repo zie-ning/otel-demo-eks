@@ -61,6 +61,9 @@
   [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s.data.'admin-password'))
   ```
 - Prometheus·Alertmanager·Tempo·Loki는 외부에 노출하지 않는다. Grafana 데이터소스로 조회하고, API가 필요하면 `kubectl port-forward -n monitoring svc/kps-prometheus 9090`(Tempo `svc/tempo 3200`, Loki `svc/loki 3100`)
+  - 스크립트에서 쓸 때는 port-forward를 백그라운드 프로세스로 띄우고 `Invoke-RestMethod <주소>/api/v1/query -Body @{ query = '<PromQL>' }`로 조회한다. `-Body`가 쿼리를 인코딩하므로 PromQL의 큰따옴표가 깨지지 않는다(6장의 따옴표 문제를 피함)
+  - Prometheus·Tempo 파드가 다시 만들어지면 port-forward 연결이 끊긴다. 재배포 후에는 다시 띄운다
+  - `kubectl get --raw /api/v1/namespaces/monitoring/services/kps-prometheus:9090/proxy/...`(API 서버 프록시)는 응답 없이 멈춘 적이 있다(2026-10-31). port-forward를 쓴다
 - Grafana 데이터소스 uid: `webstore-metrics`(Prometheus), `webstore-traces`(Tempo), `webstore-logs`(Loki). 데모 대시보드가 이 uid를 참조하므로 바꾸지 않는다.
 
 ### 알림 채널 (Slack)
@@ -75,6 +78,13 @@ Alertmanager가 `severity`별로 Slack 채널에 보낸다: `critical` → `#ale
 - 스크립트가 파일을 읽어 Secret `alertmanager-slack`을 매번 갱신하고(값은 출력하지 않음), Alertmanager가 이 Secret을 `/etc/alertmanager/secrets/alertmanager-slack/`에 마운트해 `api_url_file`로 읽는다. URL은 values나 Helm 릴리스 기록에 남지 않는다.
 - 설정을 바꾸기 전에 렌더링한 설정을 실행 중인 파드의 `amtool check-config`로 검사할 수 있다. 루트 파일 시스템이 읽기 전용이라 `/alertmanager/`(데이터 디렉터리)에 임시로 쓴다.
 - 지금 들어온 알림: `kubectl exec -n monitoring alertmanager-kps-alertmanager-0 -c alertmanager -- amtool alert query --alertmanager.url=http://localhost:9093`
+- **트래픽을 일부러 멈출 때**(load-generator를 0으로 줄여 트레이스를 관찰하는 등): 기준선 알림 `ShopTrafficLow`가 5분 뒤 critical로 울린다. 줄이기 전에 silence를 건다
+  ```powershell
+  kubectl exec -n monitoring alertmanager-kps-alertmanager-0 -c alertmanager -- amtool --alertmanager.url=http://localhost:9093 silence add alertname=ShopTrafficLow --duration=2h --comment=load-generator-0
+  ```
+  다시 늘린 뒤 `amtool silence query`로 ID를 확인해 `amtool silence expire <ID>`로 푼다
+- **데모 차트를 재배포한 직후** 주문 SLO warning이 울릴 수 있다. Collector가 재시작하는 동안 quote 요청이 5초 시간 초과로 실패해 주문이 실패했다(2026-10-31, [Phase 4 상세](phases/phase-4-slo-alerts.md)의 ② 진행 중 발견)
+- 기준선 알림 규칙은 `observability/alerts/`(PrometheusRule). 고치기 전에 `kubectl apply --dry-run=server -f observability/alerts`로 검증한다. promtool로 검사하려면 Prometheus 파드에 `sh`가 없으므로 `spec:` 아래 내용을 표준 입력으로 넘긴다(`kubectl exec -i ... -c prometheus -- promtool check rules`)
 
 ### 데모 배포
 ```powershell
@@ -177,6 +187,18 @@ aws ec2 describe-security-groups --profile terraform-admin --filters Name=vpc-id
 ```powershell
 terraform -chdir=terraform/01-cluster force-unlock <LOCK_ID>
 ```
+
+### destroy 도중 네트워크가 끊겨 state를 저장하지 못했다 (`errored.tfstate`)
+증상: `01-cluster destroy`가 `dial tcp: lookup ...amazonaws.com: no such host`로 실패하고, `Failed to persist state to backend`, `Error releasing the state lock`이 이어진다. 작업 디렉터리(`terraform/01-cluster/`)에 `errored.tfstate`가 생긴다 (2026-10-31, 로컬 DNS가 약 20분 끊김).
+
+원인: 삭제가 진행되는 중에 로컬 네트워크(DNS)가 끊겼다. AWS 쪽 삭제는 일부 끝났는데(이때는 노드그룹·EC2 삭제됨, 클러스터·VPC 남음) S3 state에는 반영되지 않았고 잠금도 남았다. **클러스터가 남아 있으면 과금이 계속되므로 바로 복구한다.**
+
+해결:
+1. 네트워크 복구 확인(`Resolve-DnsName ec2.ap-northeast-2.amazonaws.com`), 실행 중인 terraform 프로세스가 없는지 확인
+2. 남은 리소스 확인: `aws eks describe-cluster`, `aws eks list-nodegroups`, `aws ec2 describe-instances`(태그 `eks:cluster-name`), VPC, 로드밸런서
+3. `terraform -chdir=terraform/01-cluster state push errored.tfstate` → 잠금 때문에 실패하면 오류의 Lock ID로 `force-unlock` 후 다시 push. `errored.tfstate`에는 실제로 지워진 리소스가 반영되어 있어 S3의 예전 state보다 정확하다
+4. `plan -destroy`로 남은 리소스를 확인하고 `down.ps1`(또는 그 plan 파일로 apply)을 다시 실행
+5. 끝나면 `errored.tfstate`를 지운다(`*.tfstate` 패턴으로 커밋되지 않지만 다음 작업에 혼동을 준다)
 
 ### 노드그룹이 30분 가까이 CREATING이다가 CREATE_FAILED가 된다 (인스턴스 0대)
 증상: apply가 `aws_eks_node_group ... Still creating...`에서 오래 멈추고, EC2 인스턴스가 하나도 생기지 않는다. 약 30분 뒤 `AsgInstanceLaunchFailures`로 실패한다.
