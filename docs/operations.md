@@ -246,6 +246,11 @@ helm uninstall otel-demo -n otel-demo --wait
 - 원인: Windows PowerShell 5.1이 따옴표 없는 `-out=up.tfplan`을 점에서 나눠 `-out=up`과 `.tfplan` 두 인자로 넘긴다 (2026-10-31, Phase 4에서 plan 파일을 만들다 발견).
 - 해결: `'-out=up.tfplan'`처럼 따옴표로 감싼다. 점이 들어간 `-옵션=값` 인자는 모두 같다.
 
+### flagd 플래그를 바꿨는데 반영되지 않는다
+- flagd UI는 `/feature` 경로 기준으로 빌드되어 있다. port-forward로 루트(`http://localhost:<포트>/`)에 열면 화면은 보이지만 스크립트가 로드되지 않아 값을 바꿔도 저장되지 않는다. **ALB의 `/feature/`로 연다**
+- flagd는 ConfigMap `flagd-config`를 직접 읽지 않는다. init 컨테이너가 시작할 때 emptyDir로 복사한 파일(`/etc/flagd/demo.flagd.json`)을 읽고 flagd UI가 그 파일을 고친다. ConfigMap을 고쳐도 파드를 다시 만들기 전에는 반영되지 않는다
+- 반영 확인: `kubectl exec -n otel-demo <flagd 파드> -c flagd-ui -- cat /app/data/demo.flagd.json`에서 해당 플래그의 `defaultVariant` (2026-11-01)
+
 ### 02-addons에서 metrics-server 애드온이 CREATE_FAILED가 된다 (웹훅 경쟁)
 - 증상: `waiting for EKS Add-On (otel-demo:metrics-server) create: unexpected state 'CREATE_FAILED'`, `failed calling webhook "mservice.elbv2.k8s.aws" ... no endpoints available for service "aws-load-balancer-webhook-service"` (2026-11-01)
 - 원인: LB Controller가 Service 변경 검사 웹훅을 등록했는데 웹훅 파드가 아직 준비되지 않은 사이에 metrics-server가 Service를 만들었다. 두 리소스에 의존성이 없어 동시에 만들어졌고, 이전에는 순서가 맞아 우연히 성공했다

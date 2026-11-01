@@ -1,6 +1,6 @@
 # Phase 4. SLO와 기준선 알림
 
-> 상태: 🚧 진행 중 (2026-10-31 시작) · 요약: [PLAN.md](../PLAN.md#phase-4-slo와-기준선-알림) · 브랜치 `feat/phase4-slo-alerts`
+> 상태: ✅ 완료 (2026-10-31 ~ 2026-11-01) · 요약: [PLAN.md](../PLAN.md#phase-4-slo와-기준선-알림) · 브랜치 `feat/phase4-slo-alerts`, PR #11
 
 ## 목표
 - 장애 시나리오(Phase 5)를 정하기 **전에** 사용자 영향(증상) 기준의 최소 알림을 둔다.
@@ -41,7 +41,7 @@
 | ② | burn-rate `PrometheusRule` (다중 구간) | `observability/alerts/`, `scripts/deploy-observability.ps1` | ✅ 적용, 19개 규칙 정상 평가 |
 | ③ | Alertmanager → Slack. 웹훅 URL은 Secret | kps values, 스크립트 | ✅ 두 채널 FIRING·RESOLVED 도착 확인 |
 | ④ | SLO 대시보드 (에러 버짓 잔량, burn rate). 서비스별 RED는 데모 대시보드 활용 | `helm/grafana/dashboards/` | ✅ SLO 폴더 "SLO 기준선", 쿼리·화면 확인 |
-| ⑤ | 검증: 의도적 에러 → Slack 도착, 기준선 알림 목록·조건 고정. Phase 5 시나리오와 겹치지 않게 flagd `cartFailure` 100%를 잠깐 켠다(장바구니 요청은 쇼핑몰 요청의 약 14%라 가용성 SLO critical 기준 7.2%를 넘을 것으로 계산. Phase 4 실측 요청률 기준 추정). 서로 다른 SLO의 critical·warning이 둘 다 Slack에 오는지(inhibit 수정)도 확인 | 이 문서, PLAN | 예정 |
+| ⑤ | 검증: 의도적 에러 → Slack 도착, 기준선 알림 목록·조건 고정 | 이 문서, PLAN, kps values(`group_by`) | ✅ 3차 시도(`cartFailure` → frontend 0개 → `paymentUnreachable`)로 Slack 도착·inhibit 확인, `group_by`에 `slo` 추가 후 고정 |
 
 ## ⓪ monitoring 노드 메모리 실측 (2026-10-31)
 
@@ -162,6 +162,69 @@
 - 이번에는 `for: 5m`을 채우기 직전에 풀렸지만, 데모 배포가 더 오래 걸리면 **클러스터를 켤 때마다 critical이 Slack으로 갈 수 있다.** 실제로 쇼핑몰 요청이 없는 상태라 알림 자체는 틀리지 않다
 - 기준선 규칙은 고치지 않는다. 시작 절차에서 다룬다(operations.md: 켜는 동안 silence 또는 무시)
 
+## ⑤ 기준선 검증 (2026-11-01)
+
+**1차 시도: flagd `cartFailure` 100% — SLO에 드러나지 않음**
+- 주입 전(05:30 UTC): burn rate 모두 0 근처, 활성 알림 `Watchdog`뿐, 쇼핑몰 요청 15.4건/초, Prometheus 가동 45분
+- 주입 05:31:42 UTC(ALB `/feature/` flagd UI에서 Claude가 변경), 해제 05:34:42 UTC
+- 결과: `AddItem`·`GetCart`는 정상, **`EmptyCart`(주문 완료 후 장바구니 비우기)만 100% 실패**(0.033건/초 = 주문 수). checkout `PlaceOrder`는 에러 상태가 아니고(주문 성공), 쇼핑몰 5xx 0%, burn rate 전부 0
+- 트레이스 `1b725ca925fa…`, `543c4c81f0fc…`, `72d3349d9a7b…`: cart `EmptyCart` `FailedPrecondition: Can't access cart storage`, checkout은 이를 무시하고 `PlaceOrder`를 끝낸다
+- **추정 정정**: "장바구니 요청은 쇼핑몰 요청의 약 14%라 가용성 SLO critical을 넘는다"는 플래그 설명("Fail cart service n%")만 보고 계산했다. 실제로는 EmptyCart만 실패했다
+- 의미: 주문 후 장바구니가 비워지지 않는 **사용자에게 보이지만 SLO가 잡지 못하는 장애**의 사례. Phase 5 공백 후보로 남긴다
+- 진행 중 확인: flagd UI를 port-forward로 루트(`/`)에 열면 스크립트가 로드되지 않아 값을 바꿔도 저장되지 않는다(UI가 `/feature` 경로 기준으로 빌드됨). ALB `/feature/`로 열어야 한다. flagd는 ConfigMap이 아니라 init 컨테이너가 emptyDir로 복사한 파일을 읽으므로 ConfigMap 수정은 반영되지 않는다
+
+**2차 시도: frontend 파드 0개 (`kubectl scale --replicas=0`) — `ShopTrafficLow`가 잡음, SLO burn 알림은 울리지 않음**
+- 주입 전(05:40:18 UTC): burn 1h 가용성 0.008, 활성 알림 `Watchdog`뿐. 주입 05:40:21, 복구 05:50:36 UTC(약 10분)
+
+| 시각 (UTC) | 경과 | 사건 |
+|---|---|---|
+| 05:40:21 | 0 | frontend 0개 |
+| 05:42 | +2분 | frontend 요청 100% 503. **쇼핑몰 요청량 15.4 → 0.78건/초**, image-provider 0건/초 |
+| 05:44:12 | +3분 51초 | `ShopTrafficLow` critical pending |
+| 05:49:10 | +8분 49초 | firing (Alertmanager 시작 시각) |
+| 05:49:40 | +9분 19초 | **Slack `#alerts-critical` 도착**: "쇼핑몰 요청 0.7건/초 (평소 약 16건/초)" |
+| 05:50:36 | +10분 15초 | frontend 1개로 복구 |
+
+- 장애 중 가용성 burn rate 최댓값: 5m **200**, 30m 4.01, 1h 1.64. 짧은 구간은 기준(14.4, 6)을 넘었지만 긴 구간(1h > 14.4, 6h·30m > 6)이 못 넘어 `SLOErrorBudgetBurn`은 울리지 않았다
+- **원인 (확인)**: load-generator는 브라우저(HeadlessChrome)로 페이지를 연다. 첫 페이지가 503이면 이어지는 이미지·API 요청을 보내지 않아 **요청량 자체가 약 1/20로 줄었다.** SLO는 비율이라 긴 구간 분모에 장애 전 정상 요청(1시간 약 4만 5천 건)이 남아 있고, 새로 생기는 에러는 0.78건/초뿐이라 비율이 거의 오르지 않는다. 계산상 warning은 약 30분, critical은 1시간 넘게 걸린다(추정)
+- **의미**: 입구가 완전히 막히는 장애에서는 에러 "비율"보다 요청 "양"이 먼저 무너진다. 이 경우를 잡으라고 둔 측정 유효성 알림 `ShopTrafficLow`가 실제로 잡았다(9분 19초). 실무에서 burn rate 알림과 함께 트래픽 급감 알림을 두는 이유를 보여주는 결과다
+- 해제: 05:52:18 UTC(복구 1분 42초 뒤) Prometheus에서 해제, Slack `[RESOLVED]` 05:54:40 UTC(firing 전송 후 `group_interval` 5분)
+- 아직 확인하지 못한 것: **실제 에러로 `SLOErrorBudgetBurn`이 발동해 Slack까지 오는 경로**. 요청량이 유지되면서 SLO가 측정하는 값이 오르는 장애가 필요하다
+
+**3차 시도: flagd `paymentUnreachable` — 주문 SLO warning·critical이 Slack에 도착** ✅
+- 주입 전(06:14:53 UTC): 주문 burn rate 전 구간 0, 활성 알림 `Watchdog`뿐, PlaceOrder 0.046건/초(1시간 127건), 쇼핑몰 요청 14.9건/초, Prometheus 가동 89분. 가용성 30m·1h burn 2.6·2.0은 2차 시도(frontend 0개)가 남긴 값
+- 주입 06:15:33, 해제 06:28:47 UTC(약 13분). ALB `/feature/` flagd UI에서 Claude가 변경
+- Phase 5 시나리오 1(PG **부분** 실패, `paymentFailure`)과 겹치지 않도록 결제 서비스 **완전 불통**으로 골랐다
+
+| 시각 (UTC) | 경과 | 사건 |
+|---|---|---|
+| 06:15:33 | 0 | `paymentUnreachable` on |
+| 06:15:55 | +22초 | `PlaceOrder` ERROR 시리즈 생성(값 0), 06:16:55에 3 → 첫 실패가 지표에 들어오기까지 약 1분 20초 |
+| 06:17:47 | +2분 14초 | PlaceOrder 100% 에러(0.047건/초), **쇼핑몰 요청량은 15.7건/초로 유지** |
+| 06:22:15 | +6분 42초 | 주문 SLO warning pending (감시 주기 20초라 실제 시작은 이보다 조금 이를 수 있음) |
+| 06:23:58 | +8분 25초 | warning firing (Alertmanager 시작 시각) |
+| 06:24:29 | **+8분 56초** | **Slack `#alerts-warning` 도착**: "SLO checkout 에러 버짓 소진 중, 에러 비율 7.513%" |
+| 06:25:17 | +9분 44초 | critical pending (이때 burn 5m 100, 1h 14.86) |
+| 06:26:58 | +11분 25초 | critical firing |
+| 06:27:29 | **+11분 56초** | **Slack `#alerts-critical` 도착**: "에러 비율 18.76%" |
+| 06:28:17 | | Alertmanager: checkout critical `active`, checkout warning **`suppressed`(inhibitedBy 1)** |
+| 06:28:30 | | 다른 SLO 확인용 테스트 알림(`slo=shop-latency` warning, `amtool`) → **`active`(억제 안 됨)** |
+| 06:28:47 | +13분 14초 | 플래그 off |
+| 06:29:29 | | 테스트 warning Slack 도착 `[FIRING:1]`(억제된 checkout warning은 빠짐) |
+
+- 장애 중 최대값: 주문 5m 에러 100%, 주문 burn 1h 24.94·6h 13.31. **쇼핑몰 가용성 burn 1h 최대 2.1**(장애 전 2.0) — `/api/checkout` 5xx 29건이 쇼핑몰 요청에 묻혔다. ①에서 계산한 "결제가 100% 실패해도 가용성 SLO는 울리지 않는다"를 실제로 확인했다
+- **inhibit 수정(PR 리뷰 반영) 확인**: 같은 SLO의 warning만 억제되고 다른 SLO의 warning은 Slack까지 갔다
+- 해제: critical은 Prometheus에서 06:33:04 해제(플래그 off 4분 17초 뒤, 5분 구간이 비워짐), Slack `[RESOLVED]` 06:37:29. warning은 30분 구간 때문에 복구 후에도 약 30분 firing이 이어진다(정상 동작)
+- critical 해제로 억제가 풀린 checkout warning이 06:34:29에 다시 Slack으로 왔다. 이 메시지 헤더는 `[FIRING:1]`인데 본문에 이미 해제된 테스트 알림도 함께 나왔다. **Slack 템플릿이 그룹의 모든 알림(`.Alerts`)을 상태 구분 없이 나열하기 때문**이다. 알려진 한계로 남긴다(본문 첫 줄의 severity·alert_type으로 구분 가능)
+- **새로 확인한 점: 서로 다른 SLO의 알림이 한 그룹으로 묶여 늦게 온다.** `group_by: [alertname, namespace]`라 같은 `SLOErrorBudgetBurn`이면 SLO가 달라도 같은 그룹이다. 이미 그룹이 있으면 새 SLO의 알림은 `group_wait`(30초)가 아니라 다음 `group_interval`(최대 5분)에 나간다(테스트 알림 06:28:30 → 06:29:29 도착). Phase 5에서 두 SLO가 차례로 깨지면 두 번째 탐지가 최대 5분 늦게 기록될 수 있다
+  - **조치**: `group_by`에 `slo` 추가(`[alertname, namespace, slo]`). 06:42~06:43 UTC 적용, Alertmanager 실제 설정에서 확인(`amtool check-config` 통과, Prometheus 재시작 없음). 적용 직후 그룹이 새로 만들어져 진행 중이던 checkout warning이 06:43:22에 한 번 더 Slack으로 왔다(설정 변경 때의 일회성 재전송)
+
+**⑤ 결론**
+- 실제 장애에서 기준선 알림이 Slack까지 도착하는 것을 확인했다: `ShopTrafficLow`(critical, 9분 19초), 주문 SLO warning(8분 56초)·critical(11분 56초), 각 해제 알림
+- 확인하지 못한 것: 쇼핑몰 가용성·지연 SLO의 burn rate 알림이 실제 장애로 발동하는 것(이번 장애는 모두 비율이 아니라 양 또는 주문 SLO로 드러남). Phase 5 시나리오 2(지연)·3(가용성)에서 확인한다
+
+## PR 리뷰 반영 (PR #11, CodeRabbit, 2026-11-01)
+
 ## PR 리뷰 반영 (PR #11, CodeRabbit, 2026-11-01)
 
 | 지적 | 판단 | 조치 |
@@ -242,9 +305,22 @@ Prometheus API(port-forward)와 Tempo 검색 API로 확인했다. 모든 수치�
 - TraceQL `select(span.http.status_code)`가 frontend-proxy 스팬에서 `nil`을 돌려줬다. 트레이스 원본에는 값이 있다. Envoy가 문자열로 보내는 값과 Tempo의 전용 열 타입이 달라서로 **추정**(확인 안 함). span metrics는 원본 속성을 읽으므로 영향이 없다
 - ~~Envoy가 5xx 응답 스팬의 상태를 `ERROR`로 기록하는지. `http.status_code` 라벨을 쓰면 상관없지만 ⑤에서 확인한다~~ → 라벨 추가 후 `http_status_code="500", status_code="STATUS_CODE_ERROR"` 시리즈로 확인했다(위)
 
-## 기준선 알림 (2026-10-31 확정)
+## 기준선 알림 (2026-10-31 확정, 2026-11-01 고정)
 
 Phase 5에서 이 목록과 조건을 **고치지 않은 상태로** 장애를 주입한다. 바뀐 점은 Phase 5 문서에 이 표와 비교해 남긴다.
+고정 시점의 파일: `observability/alerts/slo-baseline.yaml`, `helm/values/kube-prometheus-stack.yaml`의 `alertmanager.config` (PR #11 머지 커밋 기준).
+
+**알림 전달 설정** (Alertmanager)
+
+| 항목 | 값 | 탐지 시간에 미치는 영향 |
+|---|---|---|
+| 라우팅 | critical → `#alerts-critical`, warning → `#alerts-warning`, `Watchdog`·`InfoInhibitor`·info는 보내지 않음 | |
+| `group_by` | `[alertname, namespace, slo]` | SLO마다 그룹이 따로 생겨 각 SLO의 첫 알림이 `group_wait` 뒤에 나간다(⑤에서 `slo` 추가) |
+| `group_wait` / `group_interval` / `repeat_interval` | 30초 / 5분 / 12시간 | firing 후 Slack까지 30초. 해제 알림과 같은 그룹의 추가 알림은 최대 5분 뒤 |
+| inhibit | 같은 `alertname`·`namespace`·`slo`의 critical이 warning을 억제 | 다른 SLO의 알림은 억제하지 않는다(⑤에서 확인) |
+| 규칙 `for` | SLO burn 2분, `ShopTrafficLow` 5분, `CollectorTelemetryDropping` 10분 | 조건 충족 후 firing까지 |
+
+**⑤에서 잰 탐지 시간** (주입 → Slack 도착): `ShopTrafficLow` 9분 19초(frontend 0개), 주문 SLO warning 8분 56초·critical 11분 56초(결제 불통). 내역은 ⑤ 절
 
 **SLO** (기준 기간 30일. burn rate 기준은 Google SRE Workbook의 다중 구간 방식)
 
@@ -380,9 +456,14 @@ Grafana **SLO** 폴더, uid `slo-baseline`, 제목 "SLO 기준선". `helm/grafan
 - 한글 summary·description·시작 시각이 깨지지 않았다
 - RESOLVED 메시지에는 summary·description이 비어 있었다. 해제할 때 `amtool`로 주석 없이 다시 보내 주석이 덮어써졌기 때문이다(테스트 방식의 영향. Prometheus 규칙은 해제 때도 주석을 유지한다). 주석이 비면 빈 줄이 남는 템플릿 모양은 ② 이후 실제 알림을 보고 다듬는다
 
-## 완료 기준
-- [ ] 의도적으로 에러를 내면 알림이 실제로 Slack에 도착
-- [ ] 기준선 알림 목록과 조건을 이 문서에 고정
+## 완료 기준 ✅ (2026-11-01)
+- [x] 의도적으로 에러를 내면 알림이 실제로 Slack에 도착: 결제 불통으로 주문 SLO warning(8분 56초)·critical(11분 56초), frontend 0개로 `ShopTrafficLow`(9분 19초), 해제 알림까지 (⑤)
+- [x] 기준선 알림 목록과 조건을 이 문서에 고정: "기준선 알림" 절(SLO·측정 유효성 알림, 알림 전달 설정, 넣지 않은 것과 한계)
 
-## 남은 일
-- `CartAddItemHighLatency`가 발생하지 않는 이유 확인
+## 남은 일 (Phase 5 이후)
+- `CartAddItemHighLatency`(데모 원본 Grafana 알림)가 발생하지 않는 이유 확인
+- 쇼핑몰 가용성·지연 SLO burn 알림의 실제 발동: Phase 5 시나리오 2·3에서 확인
+- Collector 재시작 시 quote 시간 초과(② 발견): Phase 5 시나리오 5
+- `cartFailure`로 확인한 "주문 후 장바구니가 비워지지 않는" 장애는 SLO 밖: Phase 5에서 공백으로 다룰지 결정
+- Slack 템플릿이 그룹 안의 해제된 알림도 상태 구분 없이 나열한다(⑤)
+- 클러스터 시작 직후 `ShopTrafficLow` pending(⓪-2 배포 후 확인)

@@ -272,8 +272,10 @@ alertmanager:
       - target_matchers:
           - 'alertname = InfoInhibitor'
     route:
-      # 차트 기본 ['namespace']는 SLO 알림(namespace 라벨 없음)이 모두 한 묶음이 된다
-      group_by: ['alertname', 'namespace']
+      # 차트 기본 ['namespace']는 SLO 알림(namespace 라벨 없음)이 모두 한 묶음이 된다.
+      # slo: 세 SLO가 alertname SLOErrorBudgetBurn을 함께 써서, slo가 없으면 다른 SLO의 알림이 기존 그룹에 들어가
+      # group_wait(30초)가 아니라 다음 group_interval(최대 5분)에 나간다(Phase 4 ⑤에서 확인). slo 라벨이 없는 알림은 영향 없음
+      group_by: ['alertname', 'namespace', 'slo']
       routes:
         # 항상 울리는 알림 경로 확인용(Watchdog)과 info 억제용(InfoInhibitor)은 사람에게 보내지 않는다
         - receiver: 'null'

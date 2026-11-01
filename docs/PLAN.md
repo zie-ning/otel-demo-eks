@@ -1,6 +1,6 @@
 # OpenTelemetry Demo on AWS EKS — 프로젝트 계획
 
-> 작성일: 2026-10-29 · 진행 상황 갱신: 2026-10-30 (Phase 3 완료)
+> 작성일: 2026-10-29 · 진행 상황 갱신: 2026-11-01 (Phase 4 완료)
 > 목적: 포트폴리오용. OpenTelemetry Demo를 AWS EKS에 배포하고, 오픈소스 관측 스택으로 모니터링·알림을 구성한 뒤 장애 주입 시나리오를 수행해 **탐지 → 분석 → 원인 규명 → 재발 방지** 과정을 문서로 남긴다.
 
 ---
@@ -112,7 +112,7 @@ Phase별 목표·상태·핵심 결과만 적는다. 진행 과정, 수치, 문�
 | 1 | 인프라 (Terraform) | ✅ 2026-10-29 | [phase-1-infrastructure.md](phases/phase-1-infrastructure.md) |
 | 2 | 데모 배포와 트레이스 관찰 | ✅ 2026-10-30 | [phase-2-demo-deploy.md](phases/phase-2-demo-deploy.md) |
 | 3 | 관측 데이터 품질 수정, 관측 스택 전환 | ✅ 2026-10-30 | [phase-3-observability-stack.md](phases/phase-3-observability-stack.md) |
-| 4 | SLO와 기준선 알림 | 🚧 진행 중 | [phase-4-slo-alerts.md](phases/phase-4-slo-alerts.md) |
+| 4 | SLO와 기준선 알림 | ✅ 2026-11-01 | [phase-4-slo-alerts.md](phases/phase-4-slo-alerts.md) |
 | 5 | 장애 주입 시나리오와 알림 개선 | 예정 | |
 | 6 | 문서화 | 예정 | |
 
@@ -153,14 +153,15 @@ Phase별 목표·상태·핵심 결과만 적는다. 진행 과정, 수치, 문�
 - **완료 기준**: Grafana 하나에서 메트릭 → 트레이스 → 로그로 이동 가능 ✅ ([증거](evidence/phase3/))
 
 ### Phase 4. SLO와 기준선 알림
-🚧 진행 중 (2026-10-31 시작) · [상세](phases/phase-4-slo-alerts.md)
+✅ 완료 (2026-11-01) · [상세](phases/phase-4-slo-alerts.md)
 
 장애 시나리오를 정하기 **전에** 사용자 영향(증상) 기준의 최소 알림만 둔다. 튜닝과 보강은 Phase 5에서 장애로 검증한 뒤에 한다.
 - [x] SLO 정의: 쇼핑몰 가용성 99.5%, 주문 성공률 99%, 쇼핑몰 지연(400ms) 99% + 측정 유효성 알림 2개(요청률 급감, Collector 드롭)
 - [x] PrometheusRule로 burn-rate 알림 작성: SLO 3개 × critical·warning + 측정 유효성 2개, 규칙 19개 정상 평가
 - [x] Alertmanager → Slack 연결: 긴급도별 `#alerts-critical`/`#alerts-warning`, 테스트 알림 도착 확인
 - [x] SLO 대시보드: Grafana SLO 폴더(SLO별 burn rate·버짓, 기준선 알림 상태, 측정 유효성, exemplar 드릴다운). 서비스별 RED는 데모 대시보드 활용
-- **완료 기준**: 의도적으로 에러를 내면 알림이 실제로 도착. 기준선 알림 목록과 조건을 문서로 고정(Phase 5에서 바뀐 점을 비교하기 위해)
+- [x] 기준선 검증: 결제 불통으로 주문 SLO warning·critical, frontend 0개로 요청률 급감 알림이 Slack에 도착. SLO 간 inhibit·그룹 분리 보정 후 고정
+- **완료 기준**: 의도적으로 에러를 내면 알림이 실제로 도착 ✅, 기준선 알림 목록과 조건을 문서로 고정 ✅ (Phase 5에서 바뀐 점을 비교하기 위해)
 
 ### Phase 5. 장애 주입 시나리오와 알림 개선
 Phase 4 기준선 알림을 **고치지 않은 상태로** 장애를 주입해, 알림이 실제로 잡는지 검증하고 공백을 메운다.
