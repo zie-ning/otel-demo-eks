@@ -83,6 +83,7 @@ Alertmanager가 `severity`별로 Slack 채널에 보낸다: `critical` → `#ale
   kubectl exec -n monitoring alertmanager-kps-alertmanager-0 -c alertmanager -- amtool --alertmanager.url=http://localhost:9093 silence add alertname=ShopTrafficLow --duration=2h --comment=load-generator-0
   ```
   다시 늘린 뒤 `amtool silence query`로 ID를 확인해 `amtool silence expire <ID>`로 푼다
+- **클러스터를 새로 켠 직후** `ShopTrafficLow`(critical)가 울릴 수 있다. 기준선 규칙은 관측 스택 배포 때 먼저 적용되고 쇼핑몰 요청은 데모 배포 뒤에 들어오기 때문이다(2026-11-01, 5분 구간이 차기 전 pending). 데모 배포 후 5~10분 안에 풀리면 무시한다
 - **데모 차트를 재배포한 직후** 주문 SLO warning이 울릴 수 있다. Collector가 재시작하는 동안 quote 요청이 5초 시간 초과로 실패해 주문이 실패했다(2026-10-31, [Phase 4 상세](phases/phase-4-slo-alerts.md)의 ② 진행 중 발견)
 - 기준선 알림 규칙은 `observability/alerts/`(PrometheusRule). 고치기 전에 `kubectl apply --dry-run=server -f observability/alerts`로 검증한다. promtool로 검사하려면 Prometheus 파드에 `sh`가 없으므로 `spec:` 아래 내용을 표준 입력으로 넘긴다(`kubectl exec -i ... -c prometheus -- promtool check rules`)
 
@@ -244,6 +245,11 @@ helm uninstall otel-demo -n otel-demo --wait
 ### terraform plan `-out=up.tfplan`이 "Too many command line arguments"로 실패한다
 - 원인: Windows PowerShell 5.1이 따옴표 없는 `-out=up.tfplan`을 점에서 나눠 `-out=up`과 `.tfplan` 두 인자로 넘긴다 (2026-10-31, Phase 4에서 plan 파일을 만들다 발견).
 - 해결: `'-out=up.tfplan'`처럼 따옴표로 감싼다. 점이 들어간 `-옵션=값` 인자는 모두 같다.
+
+### 02-addons에서 metrics-server 애드온이 CREATE_FAILED가 된다 (웹훅 경쟁)
+- 증상: `waiting for EKS Add-On (otel-demo:metrics-server) create: unexpected state 'CREATE_FAILED'`, `failed calling webhook "mservice.elbv2.k8s.aws" ... no endpoints available for service "aws-load-balancer-webhook-service"` (2026-11-01)
+- 원인: LB Controller가 Service 변경 검사 웹훅을 등록했는데 웹훅 파드가 아직 준비되지 않은 사이에 metrics-server가 Service를 만들었다. 두 리소스에 의존성이 없어 동시에 만들어졌고, 이전에는 순서가 맞아 우연히 성공했다
+- 해결: `terraform/02-addons/main.tf`의 `aws_eks_addon.metrics_server`에 `depends_on = [helm_release.lb_controller]` 추가. 실패한 애드온은 state에 tainted로 남아 다음 plan에서 교체(1 add, 1 destroy)된다
 
 ### up.ps1에서 02-addons가 실패한다
 - `Error: Kubernetes cluster unreachable`: kubeconfig나 IP 허용 목록 문제다. 위의 IP 변경 항목을 확인한다.

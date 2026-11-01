@@ -18,6 +18,7 @@
 | span metrics 라벨 추가 | Collector `span_metrics`에 `upstream_cluster`, `http.status_code` dimension 추가 | Envoy 스팬 이름이 `GET`/`POST`뿐이고 Envoy는 SDK HTTP 지표를 내지 않아, 기존 지표로는 백엔드·응답 코드를 구분할 수 없었다. 시리즈가 늘어나는 비용은 배포 후 실측으로 확인 |
 | 기준선 알림 구성 | SLO 3개(각각 critical·warning burn rate) + 쇼핑몰 요청률 급감 + Collector 전송 실패·드롭 + kps 기본 규칙. 아래 "기준선 알림" 표 | 원인 기준 알림은 넣지 않는다. 다만 **측정이 유효한지 지키는 알림**(SLI가 사라지거나 일부만 계산되는 상태)은 넣는다. 그래야 Phase 5에서 "못 잡았다"와 "측정이 망가져 있었다"를 구분할 수 있다 (2026-10-31) |
 | 지연 임계값 | **400ms** (처음 제안 800ms에서 변경) | 쇼핑몰 요청은 평소 100%가 100ms 이내(p99.9 75ms). 800ms는 10배 느려져도 울리지 않는다. 800ms를 제안한 이유("정적 파일과 섞여 작은 지연에도 버짓을 쓴다")는 실측으로 해당하지 않았다 |
+| 데이터 종류별 지표 출처 | **인프라(노드·파드 자원·쿠버네티스 오브젝트 상태)는 kps, 앱 지표·span metrics·미들웨어는 Collector** | 도구를 하나로 줄이는 것이 아니라 같은 데이터를 두 곳에서 모으지 않는 것이 목적. 전부 kps로는 할 수 없다: span metrics는 트레이스 파이프라인에서만 만들 수 있고(SLI의 출처), 앱 지표는 15개 서비스 SDK가 OTLP로 보내며, 트레이스·로그 때문에 Collector는 어차피 남는다. 미들웨어는 kps에 대응 수집기가 없어 exporter 4개를 새로 두는 대신 Collector 수신기를 유지한다 (2026-11-01) |
 | kps 기본 규칙 | **Slack으로 보낸다** (critical·warning). `Watchdog`·`InfoInhibitor`는 보내지 않음 | 노드 장애·크래시 루프처럼 SLO보다 먼저 드러나는 문제를 다룬다. 처음에는 기준선을 흐린다는 이유로 보내지 않으려 했으나, 같은 채널에서 SLO 알림과 도착 시각을 비교하는 것이 Phase 5 근거가 되어 바꿨다 |
 
 ---
@@ -35,11 +36,11 @@
 
 | # | 작업 | 바꿀 곳 | 상태 |
 |---|---|---|---|
-| ⓪ | 선행 정리: monitoring 노드 메모리 limits 합 94% 조정, kps·Collector 인프라 지표 중복 중 알림에 쓸 쪽 결정 | `helm/values/`, `helm/grafana/` | 메모리 ✅ requests 조정(limits는 문제 아님). 지표 중복: 조사 완료, **kps 일원화 방안 결정 대기**(⓪-2) |
+| ⓪ | 선행 정리: monitoring 노드 메모리 limits 합 94% 조정, kps·Collector 인프라 지표 중복 중 알림에 쓸 쪽 결정 | `helm/values/`, `helm/grafana/` | 메모리 ✅ requests 조정(limits는 문제 아님). 지표 중복: ✅ kps 일원화(Collector 인프라 시리즈 0, apm-dashboard 쿼리 확인)(⓪-2) |
 | ① | SLO 2~3개 정의 (예: 결제 성공률, frontend p95 지연). 특정 장애 원인에 맞춘 조건은 넣지 않는다 | 이 문서, `otel-demo.yaml`(span metrics 라벨) | ✅ SLO 3개와 측정 유효성 알림 2개 확정 |
 | ② | burn-rate `PrometheusRule` (다중 구간) | `observability/alerts/`, `scripts/deploy-observability.ps1` | ✅ 적용, 19개 규칙 정상 평가 |
 | ③ | Alertmanager → Slack. 웹훅 URL은 Secret | kps values, 스크립트 | ✅ 두 채널 FIRING·RESOLVED 도착 확인 |
-| ④ | SLO 대시보드 (에러 버짓 잔량, burn rate). 서비스별 RED는 데모 대시보드 활용 | `helm/grafana/dashboards/` | 예정 |
+| ④ | SLO 대시보드 (에러 버짓 잔량, burn rate). 서비스별 RED는 데모 대시보드 활용 | `helm/grafana/dashboards/` | ✅ SLO 폴더 "SLO 기준선", 쿼리·화면 확인 |
 | ⑤ | 검증: 의도적 에러 → Slack 도착, 기준선 알림 목록·조건 고정. Phase 5 시나리오(`paymentFailure` 등)와 겹치지 않는 방법으로 에러를 낸다 | 이 문서, PLAN | 예정 |
 
 ## ⓪ monitoring 노드 메모리 실측 (2026-10-31)
@@ -113,7 +114,7 @@
 | 데모 linux-dashboard | Collector: `system_*` 14개 (대시보드 전체) |
 | `k8s_cluster` 지표 | 사용처 없음 |
 
-**정리 방안 (제안, 결정 대기)**
+**정리 방안 — kps 일원화로 결정 (2026-11-01)**
 - **kps로 일원화**: 인프라(노드·파드 자원·쿠버네티스 오브젝트 상태)는 kps만 수집하고, Collector는 앱 텔레메트리와 kps에 대응이 없는 것(Kafka·PostgreSQL·Valkey·nginx·Collector 자신)만 맡는다
   1. `otel-demo.yaml`에서 Collector presets `hostMetrics`·`kubeletMetrics`·`clusterMetrics`를 끈다(hostfs 마운트·관련 RBAC도 빠짐)
   2. apm-dashboard 인프라 패널 4개를 kps 지표로 다시 쓴다. 파드: cAdvisor `container_*{job="kubelet"}`를 `target_info`의 `k8s_pod_name`과 `pod`로 연결. 호스트: node-exporter를 `node_uname_info`로 노드 이름과 연결
@@ -123,15 +124,53 @@
 - 대안: 사용처가 없는 `k8s_cluster`만 끈다(대시보드 수정 없음, 이름 충돌은 남음)
 - 데모 차트를 재배포하면 Collector가 재시작되어 주문이 몇 건 실패할 수 있다(② 진행 중 발견)
 
+**반영 (클러스터 생성 전, 렌더링으로 확인)**
+- `otel-demo.yaml`: presets 3개 `enabled: false`. 렌더링 결과 세 수신기 언급 0건, metrics 파이프라인 수신기는 `otlp`·`kafkametrics`·`span_metrics`·`prometheus/ad`·`receiver_creator/metrics`. hostfs 마운트와 노드 통계·클러스터 조회 권한이 빠지고 RBAC는 파드·네임스페이스·레플리카셋 조회만 남는다. `K8S_NODE_NAME` 환경변수는 남아 `host.name` 처리(OBS-1)가 유지된다
+- `apm-dashboard.json` Infrastructure 패널 쿼리 4개(그 밖은 그대로, JSON 문법 검사 통과)
+
+| 패널 | 이전 (Collector) | 이후 (kps) |
+|---|---|---|
+| 호스트 CPU | `system_cpu_time_seconds_total{state!="idle"}` | `node_cpu_seconds_total{job="node-exporter", mode!="idle"}`, `node_uname_info`의 `nodename`을 `host_name`으로 바꿔 `target_info`와 연결 |
+| 호스트 메모리 | `system_memory_usage_bytes` used ÷ 합계 | `1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes` (정의가 조금 달라 값이 약간 다를 수 있다) |
+| 파드 CPU | `k8s_pod_cpu_time_seconds_total` | `container_cpu_usage_seconds_total{job="kubelet", metrics_path="/metrics/cadvisor", container!="", image!=""}`, `pod` → `k8s_pod_name` |
+| 파드 메모리 | `k8s_pod_memory_working_set_bytes` | `container_memory_working_set_bytes{...같은 조건}` (파드 합계 대신 컨테이너 합계) |
+
+- linux-dashboard 삭제(`hostmetrics` 전용). 노드는 kps 기본 대시보드로 본다. 남은 저장소 대시보드 7개에 Collector 인프라 지표 참조 0건
+
+**배포 후 확인 (2026-11-01, 새 클러스터)**
+- 클러스터 재생성: 01-cluster 50개(04:31~04:41 UTC), 02-addons 6개. 02-addons는 처음에 metrics-server 애드온이 LB Controller 웹훅 경쟁으로 `CREATE_FAILED` → `depends_on` 추가 후 교체(1 add, 1 destroy)로 해결([operations.md](../operations.md) 문제 해결)
+- 관측 스택·규칙·데모 배포(04:43~04:49). 파드 53개 Running, Collector 마운트는 `/conf`만(hostfs 없음), monitoring 노드 requests 2802Mi(39%)
+- 지표 (04:49 UTC)
+
+| 구분 | 지표 | 시리즈 |
+|---|---|---|
+| Collector 인프라 (0이어야 함) | `k8s_pod_*`·`k8s_node_*`·`k8s_container_*`·`k8s_volume_*` / `k8s_deployment_*` 등 / `container_*{job!="kubelet"}` | **0 / 0 / 0** |
+| | `system_*` | 117 (아래) |
+| kps 인프라 | `node_*` / `kube_*` / `container_*{job="kubelet"}` | 4,196 / 4,128 / 8,434 |
+| Collector 유지 | `kafka_*` / `postgresql_*` / `redis_*` / `nginx_*` / `httpcheck_*` | 48 / 108 / 34 / 7 / 8 |
+| | span metrics calls / `otelcol_*` / `target_info` | 125 / 2,115 / 39 |
+| 전체 head | | 101,456 (어제 122,736. 가동 시간이 달라 단순 비교는 어렵다) |
+
+- **`system_*` 117개는 전부 recommendation(Python) 서비스 SDK가 보내는 앱 지표**다(`job="opentelemetry-demo/recommendation"`, 시스템 지표 계측). Collector 인프라 수신기가 아니어서 이번 정리 대상이 아니다. 원래 apm-dashboard 호스트 패널도 `service_name=""`로 이 지표를 걸러 냈다. 기록만 한다
+- `container_memory_working_set_bytes` 이름 충돌이 사라졌다(`job!="kubelet"` 0)
+- apm-dashboard 새 쿼리 4개를 `service_name`=checkout·frontend로 대입해 계산: 모두 결과가 나옴. 호스트 메모리 0.348은 node-exporter 직접 계산(`10.0.0.196:9100` 0.348)과 같다. 파드는 `checkout-c674bb4d5-4q5pr` 9.1MB, `frontend-64495fc89f-pdx5w` CPU 0.047코어·99MB
+- Grafana `demo-dashboards` ConfigMap 키 7개(linux-dashboard 없음). 브라우저 화면은 확인하지 않았다
+- 기준선 규칙 19개 `health: ok`, Alertmanager 활성 알림 `Watchdog`뿐
+
+**진행 중 발견: 클러스터 시작 직후 `ShopTrafficLow`가 pending이 된다**
+- 04:50 UTC에 `ShopTrafficLow`가 pending이었다. 규칙은 관측 스택 배포 때(04:46경) 먼저 적용되고 데모·span metrics는 그 뒤(04:48~04:49)에 들어오기 시작해, 5분 구간 요청률이 0부터 차오르는 동안 기준(5건/초) 미만이었다. 04:50:11에 5분 rate 5.43(2분 rate 13.6)으로 기준을 넘어 풀렸다
+- 이번에는 `for: 5m`을 채우기 직전에 풀렸지만, 데모 배포가 더 오래 걸리면 **클러스터를 켤 때마다 critical이 Slack으로 갈 수 있다.** 실제로 쇼핑몰 요청이 없는 상태라 알림 자체는 틀리지 않다
+- 기준선 규칙은 고치지 않는다. 시작 절차에서 다룬다(operations.md: 켜는 동안 silence 또는 무시)
+
 ## 다음 작업 재개 지점 (2026-10-31 클러스터 삭제 시점)
 
 - 완료: ③ Slack 연결, ⓪ 메모리 requests 조정, ① SLO·기준선 알림 확정과 span metrics 라벨 추가, ② 규칙 적용·정상 평가 확인
 - 미커밋 변경: values 3개(`kube-prometheus-stack`·`tempo`·`otel-demo`), `observability/alerts/slo-baseline.yaml`, `deploy-observability.ps1`, 문서
 - 다음 순서
-  1. ⓪-2 인프라 지표 일원화 방안 결정 → values·대시보드 수정
-  2. `up.ps1` → `deploy-observability.ps1` → `deploy-demo.ps1` (규칙은 `deploy-observability.ps1`이 적용)
-  3. 일원화 결과 확인(Collector 인프라 시리즈 0, apm-dashboard 패널), 기준선 규칙이 새 클러스터에서도 정상 평가되는지 확인
-  4. ④ SLO 대시보드 → ⑤ 의도적 에러로 Slack 도착 검증, 기준선 고정
+  1. ~~⓪-2 인프라 지표 일원화 방안 결정 → values·대시보드 수정~~ ✅ 2026-11-01
+  2. ~~`up.ps1` → `deploy-observability.ps1` → `deploy-demo.ps1`~~ ✅ 2026-11-01
+  3. ~~일원화 결과 확인, 기준선 규칙 정상 평가 확인~~ ✅ 2026-11-01 (apm-dashboard 브라우저 화면은 미확인)
+  4. ~~④ SLO 대시보드~~ ✅ 2026-11-01 → ⑤ 의도적 에러로 Slack 도착 검증, 기준선 고정
 - 새 클러스터는 Prometheus·Tempo가 비어 있다. 평상시 burn rate는 트래픽이 쌓인 뒤(최소 30분~1시간) 다시 본다
 
 ## ① SLI 후보 지표 확인 (2026-10-31, 클러스터 생성 후 약 1시간 반)
@@ -270,6 +309,29 @@ Phase 5에서 이 목록과 조건을 **고치지 않은 상태로** 장애를 �
 - 원인 **추정**: quote(PHP)가 요청 처리 중 텔레메트리를 동기로 내보내다 Collector가 없는 동안 막혔다. 확인하지 않았다
 - 영향: 데모 차트 재배포(Collector 재시작) 한 번으로 주문 에러 버짓을 쓴다. PlaceOrder가 30분에 약 50건이라 3건이 실패하면 30분 에러율 6%로 warning 조건의 짧은 구간을 넘는다(긴 구간 6시간도 클러스터 가동 시간이 짧으면 같이 넘을 수 있다). **배포 직후 warning은 이 현상일 수 있다**
 - 관측 파이프라인이 앱 요청을 막는 문제라 데이터 품질(OBS)이 아니라 장애 후보로 본다. Phase 5에서 재현·원인 확인 후보로 남긴다
+
+## ④ SLO 대시보드 (`helm/grafana/dashboards/slo-dashboard.json`, 2026-11-01)
+
+Grafana **SLO** 폴더, uid `slo-baseline`, 제목 "SLO 기준선". `helm/grafana/kustomization.yaml`의 `slo-dashboards` ConfigMap(데모 원본이 아니라 폴더를 나눔). 패널이 많아 생성 스크립트로 JSON을 만들었다(스크립트는 저장소에 두지 않음, JSON만 관리).
+
+| 행 | 패널 | 쓰는 값 |
+|---|---|---|
+| SLO: `$slo` (SLO마다 반복) | 목표 · SLI(최근 1시간) · 버짓 남음(6h 기준) · burn rate(5m·30m·1h·6h) · burn rate 추이(점선 6, 14.4) · SLI 추이(목표선) | recording rule `slo:sli_error:ratio_rate*`, `slo:error_budget:ratio` |
+| 기준선 알림 상태 | state timeline: `SLOErrorBudgetBurn`·`ShopTrafficLow`·`CollectorTelemetryDropping`의 pending·firing | `ALERTS` |
+| 측정 유효성 | 쇼핑몰 요청률(점선 5) · 주문 요청률 · Collector 거부·전송 실패 | span metrics, `otelcol_*` |
+| 드릴다운 | 쇼핑몰 5xx · 주문 실패 · 쇼핑몰 지연 p99(점선 400ms). exemplar 점을 누르면 Tempo 트레이스 | 원본 span metrics (recording rule에는 exemplar가 없음) |
+
+- 버짓 남음은 기준 기간 30일 대신 기록하는 가장 긴 구간(6h)으로 계산한다. 클러스터 가동 시간이 짧기 때문이며 패널 설명에 적었다
+- 알림 상태 타임라인은 Phase 5에서 탐지 시각(pending 시작 → firing)을 읽는 용도다. Slack 도착은 여기에 `group_wait` 30초가 더해진다
+
+**검증**
+- 모든 패널 쿼리를 `$slo`=shop-availability·checkout·shop-latency로 대입해 Prometheus API로 계산: 오류 0건, 주문 실패(실패가 없어 시리즈 없음)만 빈 결과 → `or vector(0)` 추가
+- 04:53 UTC 값: 가용성 SLI 99.94%·burn 0.12, 주문 100%·0, 지연 99.94%·0.056. 새 클러스터인데 0이 아닌 것은 시작 직후 frontend 5xx 2건(500·503)과 400ms 초과 2건(가동 이후 쇼핑몰 요청 4,185건 중)
+- Grafana API(port-forward, 익명 Viewer)로 로드 확인: SLO 폴더 1개, OpenTelemetry Demo 7개, Kubernetes 23개. PowerShell 5.1 `Invoke-RestMethod`는 응답을 UTF-8로 읽지 않아 한글 제목이 깨져 보이지만 실제 저장은 정상(코드포인트 비교)
+- 브라우저(내장 브라우저, `localhost:13000` port-forward)로 화면 확인 후 수정: 임계값 면 칠하기 → 점선, burn rate y축 기본 최대 20(값이 0이어도 기준선이 보이게), 값 하나짜리 stat은 값만 표시, 잘리던 제목 축약. 수정 후 다시 확인
+- 알림 상태 타임라인에 시작 직후의 `ShopTrafficLow critical (pending)`이 13:50 KST(04:50 UTC)에 표시됨
+- 드릴다운 지연 p99 패널에 exemplar 점이 표시됨. 점을 눌러 Tempo로 이동하는 것은 확인하지 않았다(Explore는 admin 로그인 필요, Phase 3 기록)
+- 증거: [slo-dashboard-top.jpg](../evidence/phase4/slo-dashboard-top.jpg)(수정 후 상단), [slo-dashboard-alerts-validity.jpg](../evidence/phase4/slo-dashboard-alerts-validity.jpg)(수정 전, 알림 상태·측정 유효성 행)
 
 ## ③ Alertmanager → Slack
 

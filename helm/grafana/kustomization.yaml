@@ -5,7 +5,10 @@
 # 원본에서 바꾼 것: cart-service-alerting.yml의 알림 수신처(grafana-default-email → kps-alertmanager),
 # contact-points.yml 추가, 원본 대시보드 버그 수정(PR #8 리뷰): linux-dashboard의 라벨 오타 kk8s_cluster_name과
 # 뒤바뀐 수신/송신 에러 열 이름, postgresql-dashboard의 라벨 오타 dpostgresql_database_name,
-# 트레이스·로그 패널의 데이터소스 전환: Jaeger → Tempo(⑤, apm·demo), OpenSearch(PPL) → Loki(LogQL)(⑥, apm·demo·collector)
+# 트레이스·로그 패널의 데이터소스 전환: Jaeger → Tempo(⑤, apm·demo), OpenSearch(PPL) → Loki(LogQL)(⑥, apm·demo·collector),
+# Phase 4 ⓪-2 인프라 지표 kps 일원화(Collector hostmetrics·kubeletstats·k8s_cluster 끔):
+# apm-dashboard Infrastructure 패널 4개를 node-exporter·cAdvisor 지표로 변경, linux-dashboard(hostmetrics 전용) 삭제.
+# 노드 상태는 kps 기본 대시보드(Kubernetes 폴더의 Node Exporter / Nodes 등)로 본다
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: monitoring
@@ -21,7 +24,6 @@ configMapGenerator:
       - dashboards/apm-dashboard.json
       - dashboards/demo-dashboard.json
       - dashboards/exemplars-dashboard.json
-      - dashboards/linux-dashboard.json
       - dashboards/NGINX-metrics.json
       - dashboards/opentelemetry-collector.json
       - dashboards/postgresql-dashboard.json
@@ -32,6 +34,16 @@ configMapGenerator:
       # 사이드카가 이 폴더에 넣는다 (kps 기본 대시보드는 "Kubernetes" 폴더)
       annotations:
         grafana_folder: OpenTelemetry Demo
+  # Phase 4 ④: 기준선 SLO 대시보드 (observability/alerts/slo-baseline.yaml의 recording rule을 그린다).
+  # 데모 원본이 아니라 이 저장소에서 만든 대시보드라 폴더를 나눈다
+  - name: slo-dashboards
+    files:
+      - dashboards/slo-dashboard.json
+    options:
+      labels:
+        grafana_dashboard: "1"
+      annotations:
+        grafana_folder: SLO
   - name: demo-alerting
     files:
       - alerting/contact-points.yml

@@ -54,6 +54,20 @@ opentelemetry-collector:
       value: monitoring
       effect: NoSchedule
 
+  # Phase 4 ⓪-2: 인프라 지표(노드·파드 자원·쿠버네티스 오브젝트 상태)는 kube-prometheus-stack만 수집한다.
+  # node-exporter·cAdvisor·kube-state-metrics와 같은 정보를 두 번 모았고, container_memory_working_set_bytes 등
+  # 같은 이름의 지표가 양쪽에서 들어와 job으로 거르지 않으면 두 배로 셌다. Collector는 앱 텔레메트리와
+  # kps에 대응이 없는 미들웨어(kafkametrics, receiver_creator의 postgresql·redis·nginx·http_check)만 맡는다.
+  # 끄면 hostmetrics·kubeletstats·k8s_cluster 수신기, hostfs 마운트, 관련 RBAC가 빠진다.
+  # host.name을 채우는 K8S_NODE_NAME 환경변수는 그대로 남는다(OBS-1 수정 유지, 렌더링으로 확인)
+  presets:
+    hostMetrics:
+      enabled: false
+    kubeletMetrics:
+      enabled: false
+    clusterMetrics:
+      enabled: false
+
   # 차트 기본값은 limits 400Mi만 있어 requests도 400Mi가 된다. 실사용은 89Mi(Phase 4 ⓪)라 예약만 하고 쓰지 않는다.
   # DaemonSet이라 모든 노드에서 같은 양을 예약한다. memory_limiter가 limits의 80%를 기준으로 동작하므로 limits는 그대로 둔다
   resources:
