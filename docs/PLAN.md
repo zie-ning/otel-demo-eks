@@ -165,13 +165,31 @@ Phase별 목표·상태·핵심 결과만 적는다. 진행 과정, 수치, 문�
 ### Phase 5. 장애 주입 시나리오와 알림 개선
 Phase 4 기준선 알림을 **고치지 않은 상태로** 장애를 주입해, 알림이 실제로 잡는지 검증하고 공백을 메운다.
 
-| # | 시나리오 | 주입 방법 | 확인할 것 |
-|---|---|---|---|
-| 1 | 결제 실패율 증가 | flagd `paymentFailure` | 기준선 SLO 알림이 잡는가, 트레이스로 원인 서비스 특정 |
-| 2 | 메모리 누수 | flagd `emailMemoryLeak` | SLO가 깨지기 전에 잡히는가. 못 잡으면 메모리 추세 알림 보강 → OOMKill·재시작과 연관 |
-| 3 | Kafka 지연 | flagd `kafkaQueueProblems` | 비동기 구간 지연이 사용자 SLO에 드러나는가, consumer lag 관측 |
-| 4 | 파드 강제 종료 / 네트워크 지연 | Chaos Mesh (도입 여부 미정) | 인프라 레벨 장애와 복원력 |
-| 5 | 트래픽 폭주 | load-generator 사용자 수 증가 | 지연 증가와 자원 포화를 어느 알림이 먼저 잡는가 |
+실무에서 실제로 일어나는 장애 유형이 겹치지 않게 고른다(2026-11-01 재구성). 주입 방법은 배포된 flagd 플래그(차트 0.42.6, 18개)와 `kubectl`로 한정하고 Chaos Mesh는 쓰지 않는다.
+
+**필수 시나리오**
+
+| # | 실무 상황 | 장애 유형 | 주입 방법 | 확인할 것 |
+|---|---|---|---|---|
+| 1 | 결제 대행사(PG) 부분 장애: 일부 카드 승인 실패 | 외부 의존성 부분 실패 | flagd `paymentFailure` 25% → 10% | 실패율에 따른 탐지 속도 차이(critical·warning). 결제가 실패해도 쇼핑몰 가용성 SLO는 울리지 않는다는 Phase 4 계산(주문 요청이 전체의 약 0.5%)의 실제 검증 |
+| 2 | 배치·마이그레이션 중 DB 락 경합으로 상품 페이지 지연 | 데이터베이스 경합 | flagd `productCatalogLockContention` | 지연 SLO(400ms)가 잡는가, 트레이스의 DB 대기 스팬으로 원인 특정 |
+| 3 | 잘못된 헬스체크 설정 배포로 장바구니 파드가 서비스에서 빠짐 | 잘못된 배포·설정 | flagd `failedReadinessProbe` (cart) | 지표 → 트레이스 → 쿠버네티스 이벤트로 원인 추적, kps 기본 규칙과 SLO 알림 중 무엇이 먼저 울리는가 |
+| 4 | 주문은 되는데 정산·사기 탐지가 밀림 | 비동기 처리 지연 | flagd `kafkaQueueProblems` | 사용자 SLO 밖의 공백. Collector가 이미 수집하는 consumer lag으로 알림 보강 후 재주입 |
+| 5 | 관측 파이프라인이 장애를 만든다: Collector 재시작 중 quote 시간 초과로 주문 실패 | 관측 도구 자체 | Collector 재시작(`kubectl rollout restart`) | Phase 4에서 실제로 발견한 문제의 재현·원인 확인(PHP SDK 동기 전송 추정)·조치. 측정 유효성 알림의 역할 |
+
+**선택 시나리오** (시간이 되면)
+
+| 실무 상황 | 주입 방법 | 확인할 것 |
+|---|---|---|
+| 노드 장애(EC2 인스턴스 회수 등) | app 노드 1대 `kubectl drain` | 남은 노드 1대에 파드가 다 들어가는가, 용량 부족과 인프라 알림 |
+| 마케팅 이벤트 트래픽 폭주 | flagd `loadGeneratorFloodHomepage` | 오토스케일링 없이 지연과 자원 포화 중 어느 알림이 먼저 잡는가 |
+| 서서히 새는 메모리 | flagd `emailMemoryLeak` | 주문은 성공하고 확인 메일만 실패하는가, 사용자 영향 없는 장애를 어떻게 다룰지 |
+| 개인정보가 텔레메트리에 섞임 | flagd `emitRawPii` | 장애가 아닌 보안 사고. 카드번호가 트레이스·로그에 남지 않는지(Collector redaction) 증명 |
+
+- 부가 기능 장애(`adFailure`, `recommendationCacheFailure`)는 SLO 밖이라 알림이 오지 않는 것이 맞다. 시나리오로 두지 않고 "중요하지 않은 장애로 사람을 깨우지 않는다"는 근거로만 다룬다
+- Phase 4 ⑤의 의도적 에러(`cartFailure`)는 위 시나리오와 겹치지 않게 골랐다
+
+**블라인드 주입**: 시나리오 목록은 정해 두되 어떤 시나리오를 언제 주입할지는 사용자가 정하고 분석하는 쪽(Claude)에 알리지 않는다. 분석은 Slack 알림과 대시보드에서 시작한다. 장애를 알고 찾는 것보다 탐지 능력을 정직하게 보여준다.
 
 시나리오마다 같은 순서로 진행한다.
 1. **주입 전**: 기준선 알림 상태 기록
@@ -195,10 +213,9 @@ Phase 4 기준선 알림을 **고치지 않은 상태로** 장애를 주입해, 
 
 | 항목 | 후보 | 결정 시점 |
 |---|---|---|
-| 장애 주입 도구 | flagd만 / Chaos Mesh 추가 | Phase 5 |
 | GitOps(Argo CD) 전환 | 선택 과제 | Phase 6 이후 |
 
-정해진 사항: Terraform state는 **S3** (Phase 0), 저장소는 **GitHub 공개** (Phase 0), 알림 채널은 **Slack** (Phase 4), monitoring 노드 메모리는 limits가 아니라 **requests를 실사용에 맞춤**, 지표 출처는 **인프라는 kps, 앱·span metrics·미들웨어는 Collector** (Phase 4, [상세](phases/phase-4-slo-alerts.md)), 노드는 m7i-flex.large × 3 유지 (근거 수치는 [Phase 3 상세](phases/phase-3-observability-stack.md))
+정해진 사항: Terraform state는 **S3** (Phase 0), 저장소는 **GitHub 공개** (Phase 0), 알림 채널은 **Slack** (Phase 4), monitoring 노드 메모리는 limits가 아니라 **requests를 실사용에 맞춤**, 지표 출처는 **인프라는 kps, 앱·span metrics·미들웨어는 Collector** (Phase 4, [상세](phases/phase-4-slo-alerts.md)), 노드는 m7i-flex.large × 3 유지 (근거 수치는 [Phase 3 상세](phases/phase-3-observability-stack.md)), 장애 주입은 **flagd + kubectl**(Chaos Mesh 미도입, 노드 장애는 `kubectl drain`으로 대신. 2026-11-01)
 
 ### 저장소 구조 (✅ 생성됨 / 예정)
 ```

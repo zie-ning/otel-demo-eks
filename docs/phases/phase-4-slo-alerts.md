@@ -41,7 +41,7 @@
 | ② | burn-rate `PrometheusRule` (다중 구간) | `observability/alerts/`, `scripts/deploy-observability.ps1` | ✅ 적용, 19개 규칙 정상 평가 |
 | ③ | Alertmanager → Slack. 웹훅 URL은 Secret | kps values, 스크립트 | ✅ 두 채널 FIRING·RESOLVED 도착 확인 |
 | ④ | SLO 대시보드 (에러 버짓 잔량, burn rate). 서비스별 RED는 데모 대시보드 활용 | `helm/grafana/dashboards/` | ✅ SLO 폴더 "SLO 기준선", 쿼리·화면 확인 |
-| ⑤ | 검증: 의도적 에러 → Slack 도착, 기준선 알림 목록·조건 고정. Phase 5 시나리오(`paymentFailure` 등)와 겹치지 않는 방법으로 에러를 낸다 | 이 문서, PLAN | 예정 |
+| ⑤ | 검증: 의도적 에러 → Slack 도착, 기준선 알림 목록·조건 고정. Phase 5 시나리오와 겹치지 않게 flagd `cartFailure` 100%를 잠깐 켠다(장바구니 요청은 쇼핑몰 요청의 약 14%라 가용성 SLO critical 기준 7.2%를 넘을 것으로 계산. Phase 4 실측 요청률 기준 추정). 서로 다른 SLO의 critical·warning이 둘 다 Slack에 오는지(inhibit 수정)도 확인 | 이 문서, PLAN | 예정 |
 
 ## ⓪ monitoring 노드 메모리 실측 (2026-10-31)
 
@@ -173,7 +173,7 @@
 | 문서에 node-exporter 대상 IP | 맞음(사설 IP도 규칙상 금지) | 삭제 |
 | SLO 대시보드 `slo="$slo"`를 `=~`로 | 해당 안 됨. 행 반복이라 각 행에서 `$slo`는 값 하나로 대입된다. All 선택 상태에서 세 행 모두 값이 나오는 것을 브라우저로 확인했다 | 변경 안 함 |
 
-- 클러스터 반영: inhibit 규칙(kps 재배포)과 대시보드 2개(ConfigMap)는 **아직 클러스터에 적용하지 않았다.** inhibit 동작(서로 다른 SLO의 critical·warning이 둘 다 Slack에 오는지)은 ⑤에서 확인한다
+- 클러스터 반영(05:22~05:24 UTC, `deploy-observability.ps1`): Alertmanager `/api/v2/status`로 실제 설정에 `equal: [namespace, alertname, slo]`가 들어간 것을 확인. Grafana SLO 대시보드 version 3(SLI 여유 패널). Prometheus는 재시작되지 않았다(시작 04:45 그대로). inhibit 동작(서로 다른 SLO의 critical·warning이 둘 다 Slack에 오는지)은 ⑤에서 확인한다
 
 ## 다음 작업 재개 지점 (2026-10-31 클러스터 삭제 시점)
 
