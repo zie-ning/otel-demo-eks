@@ -129,8 +129,8 @@
     {
       "type": "stat",
       "id": 3,
-      "title": "SLI (최근 1시간)",
-      "description": "1 - slo:sli_error:ratio_rate1h. 목표보다 낮으면 빨강",
+      "title": "SLI 여유 (SLI − 목표, 1시간)",
+      "description": "(1 - slo:sli_error:ratio_rate1h) - 목표. 0 미만이면 최근 1시간 SLI가 목표보다 낮다. SLI 값 자체는 아래 SLI 추이에서 본다",
       "datasource": {
         "type": "prometheus",
         "uid": "webstore-metrics"
@@ -147,8 +147,8 @@
             "type": "prometheus",
             "uid": "webstore-metrics"
           },
-          "expr": "1 - slo:sli_error:ratio_rate1h{slo=\"$slo\"}",
-          "legendFormat": "SLI",
+          "expr": "(1 - slo:sli_error:ratio_rate1h{slo=\"$slo\"}) - on(slo) (1 - slo:error_budget:ratio{slo=\"$slo\"})",
+          "legendFormat": "SLI 여유",
           "refId": "A",
           "range": false,
           "instant": true
@@ -166,7 +166,7 @@
               },
               {
                 "color": "green",
-                "value": 0.99
+                "value": 0
               }
             ]
           },

@@ -153,7 +153,7 @@
 
 - **`system_*` 117개는 전부 recommendation(Python) 서비스 SDK가 보내는 앱 지표**다(`job="opentelemetry-demo/recommendation"`, 시스템 지표 계측). Collector 인프라 수신기가 아니어서 이번 정리 대상이 아니다. 원래 apm-dashboard 호스트 패널도 `service_name=""`로 이 지표를 걸러 냈다. 기록만 한다
 - `container_memory_working_set_bytes` 이름 충돌이 사라졌다(`job!="kubelet"` 0)
-- apm-dashboard 새 쿼리 4개를 `service_name`=checkout·frontend로 대입해 계산: 모두 결과가 나옴. 호스트 메모리 0.348은 node-exporter 직접 계산(`10.0.0.196:9100` 0.348)과 같다. 파드는 `checkout-c674bb4d5-4q5pr` 9.1MB, `frontend-64495fc89f-pdx5w` CPU 0.047코어·99MB
+- apm-dashboard 새 쿼리 4개를 `service_name`=checkout·frontend로 대입해 계산: 모두 결과가 나옴. 호스트 메모리 0.348은 node-exporter 직접 계산 값(0.348)과 같다. 호스트 CPU 0.666은 이때 대조하지 않았고, PR #11 리뷰에서 코어 수로 나누지 않은 값(사용 코어 수)을 비율 단위로 표시한 오류로 확인되어 고쳤다(아래 "PR 리뷰 반영"). 파드는 `checkout-c674bb4d5-4q5pr` 9.1MB, `frontend-64495fc89f-pdx5w` CPU 0.047코어·99MB
 - Grafana `demo-dashboards` ConfigMap 키 7개(linux-dashboard 없음). 브라우저 화면은 확인하지 않았다
 - 기준선 규칙 19개 `health: ok`, Alertmanager 활성 알림 `Watchdog`뿐
 
@@ -161,6 +161,19 @@
 - 04:50 UTC에 `ShopTrafficLow`가 pending이었다. 규칙은 관측 스택 배포 때(04:46경) 먼저 적용되고 데모·span metrics는 그 뒤(04:48~04:49)에 들어오기 시작해, 5분 구간 요청률이 0부터 차오르는 동안 기준(5건/초) 미만이었다. 04:50:11에 5분 rate 5.43(2분 rate 13.6)으로 기준을 넘어 풀렸다
 - 이번에는 `for: 5m`을 채우기 직전에 풀렸지만, 데모 배포가 더 오래 걸리면 **클러스터를 켤 때마다 critical이 Slack으로 갈 수 있다.** 실제로 쇼핑몰 요청이 없는 상태라 알림 자체는 틀리지 않다
 - 기준선 규칙은 고치지 않는다. 시작 절차에서 다룬다(operations.md: 켜는 동안 silence 또는 무시)
+
+## PR 리뷰 반영 (PR #11, CodeRabbit, 2026-11-01)
+
+| 지적 | 판단 | 조치 |
+|---|---|---|
+| 세 SLO가 alertname `SLOErrorBudgetBurn`을 함께 써서, 차트 기본 inhibit(`equal: [namespace, alertname]`)로 **한 SLO의 critical이 다른 SLO의 warning을 억제** | 맞음. Phase 5에서 억제된 알림이 "탐지 실패"로 잘못 기록될 수 있었다 | kps values에 `inhibit_rules`를 옮겨 적고 severity 간 억제 2개의 `equal`에 `slo` 추가(목록이라 기본 4개를 모두 적음). `amtool check-config` 통과 |
+| apm-dashboard 호스트 CPU가 코어 수로 나누지 않은 값을 `percentunit`으로 표시 | 맞음. 데모 원본(hostmetrics) 쿼리에도 있던 문제를 kps로 옮기며 그대로 가져왔다. 2코어 노드라 실제 사용률의 2배로 보였다(⓪-2의 0.666은 사용 코어 수였다) | `count by (instance) (node_cpu_seconds_total{mode="idle"})`로 나눔. 계산 결과 0.087 |
+| SLO 대시보드 SLI 색 기준이 모든 SLO에 0.99로 같음 | 맞음. 가용성 목표 99.5%에서 99.2%여도 초록이었다 | "SLI 여유(SLI − 목표)"로 바꿔 0 미만이면 빨강. 계산 결과 가용성 +0.49%p, 주문 +1%p, 지연 +0.99%p |
+| PLAN.md ② 체크·저장소 구조 표시 누락 | 맞음 | 체크와 한 줄 요약, `observability/alerts/` ✅ |
+| 문서에 node-exporter 대상 IP | 맞음(사설 IP도 규칙상 금지) | 삭제 |
+| SLO 대시보드 `slo="$slo"`를 `=~`로 | 해당 안 됨. 행 반복이라 각 행에서 `$slo`는 값 하나로 대입된다. All 선택 상태에서 세 행 모두 값이 나오는 것을 브라우저로 확인했다 | 변경 안 함 |
+
+- 클러스터 반영: inhibit 규칙(kps 재배포)과 대시보드 2개(ConfigMap)는 **아직 클러스터에 적용하지 않았다.** inhibit 동작(서로 다른 SLO의 critical·warning이 둘 다 Slack에 오는지)은 ⑤에서 확인한다
 
 ## 다음 작업 재개 지점 (2026-10-31 클러스터 삭제 시점)
 

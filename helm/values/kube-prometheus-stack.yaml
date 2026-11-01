@@ -238,12 +238,39 @@ prometheus:
 
 alertmanager:
   # Phase 4: 긴급도(severity)별로 Slack 채널을 나눈다. 차트 기본값 위에 덮어쓴다.
-  # global·inhibit_rules·templates는 차트 기본값을 그대로 쓴다(맵은 병합됨). route.routes·receivers는 목록이라 통째로 바뀐다.
-  # 차트 기본 inhibit_rules: 같은 alertname·namespace의 critical이 울리면 warning은 보내지 않는다
-  # (SLO 빠른 소진·느린 소진 알림을 같은 alertname으로 두면 critical만 온다).
+  # global·templates는 차트 기본값을 그대로 쓴다(맵은 병합됨). route.routes·receivers·inhibit_rules는 목록이라 통째로 바뀐다.
   # 웹훅 URL은 Secret alertmanager-slack(deploy-observability.ps1이 로컬 파일에서 생성)을 파일로 읽는다.
   # values와 Helm 릴리스 기록에 URL이 남지 않는다.
   config:
+    # 차트 기본 4개(helm show values 92.16.0)를 옮겨 적고, severity 간 억제 2개의 equal에 slo를 더했다.
+    # 같은 alertname·namespace의 critical이 울리면 warning은 보내지 않는다(SLO 빠른·느린 소진을 같은 alertname으로 둠).
+    # 세 SLO가 alertname SLOErrorBudgetBurn을 함께 써서, slo를 비교하지 않으면 한 SLO의 critical이
+    # 다른 SLO의 warning까지 억제한다(PR #11 리뷰). slo 라벨이 없는 알림은 양쪽 모두 빈 값이라 기존 동작과 같다
+    inhibit_rules:
+      - source_matchers:
+          - 'severity = critical'
+        target_matchers:
+          - 'severity =~ warning|info'
+        equal:
+          - 'namespace'
+          - 'alertname'
+          - 'slo'
+      - source_matchers:
+          - 'severity = warning'
+        target_matchers:
+          - 'severity = info'
+        equal:
+          - 'namespace'
+          - 'alertname'
+          - 'slo'
+      - source_matchers:
+          - 'alertname = InfoInhibitor'
+        target_matchers:
+          - 'severity = info'
+        equal:
+          - 'namespace'
+      - target_matchers:
+          - 'alertname = InfoInhibitor'
     route:
       # 차트 기본 ['namespace']는 SLO 알림(namespace 라벨 없음)이 모두 한 묶음이 된다
       group_by: ['alertname', 'namespace']

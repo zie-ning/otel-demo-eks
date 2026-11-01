@@ -157,7 +157,7 @@ Phase별 목표·상태·핵심 결과만 적는다. 진행 과정, 수치, 문�
 
 장애 시나리오를 정하기 **전에** 사용자 영향(증상) 기준의 최소 알림만 둔다. 튜닝과 보강은 Phase 5에서 장애로 검증한 뒤에 한다.
 - [x] SLO 정의: 쇼핑몰 가용성 99.5%, 주문 성공률 99%, 쇼핑몰 지연(400ms) 99% + 측정 유효성 알림 2개(요청률 급감, Collector 드롭)
-- [ ] PrometheusRule로 burn-rate 알림 작성
+- [x] PrometheusRule로 burn-rate 알림 작성: SLO 3개 × critical·warning + 측정 유효성 2개, 규칙 19개 정상 평가
 - [x] Alertmanager → Slack 연결: 긴급도별 `#alerts-critical`/`#alerts-warning`, 테스트 알림 도착 확인
 - [x] SLO 대시보드: Grafana SLO 폴더(SLO별 burn rate·버짓, 기준선 알림 상태, 측정 유효성, exemplar 드릴다운). 서비스별 RED는 데모 대시보드 활용
 - **완료 기준**: 의도적으로 에러를 내면 알림이 실제로 도착. 기준선 알림 목록과 조건을 문서로 고정(Phase 5에서 바뀐 점을 비교하기 위해)
@@ -210,7 +210,7 @@ Phase 4 기준선 알림을 **고치지 않은 상태로** 장애를 주입해, 
 ├── helm/
 │   ├── values/            # ✅ otel-demo, kube-prometheus-stack, tempo, loki
 │   └── grafana/           # ✅ 데모 대시보드·알림 (kustomize ConfigMap)
-├── observability/alerts/  # 예정: PrometheusRule (SLO, burn-rate)
+├── observability/alerts/  # ✅ PrometheusRule (SLO, burn-rate)
 ├── scenarios/             # 예정: 시나리오별 실행 절차와 포스트모템
 ├── scripts/               # ✅ up / deploy-observability / deploy-demo / down / check-resource-attributes
 └── docs/                  # ✅ PLAN, phases/(Phase 상세), operations, observability-findings, evidence/
