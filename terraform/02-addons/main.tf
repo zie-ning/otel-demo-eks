@@ -23,4 +23,9 @@ data "aws_eks_cluster" "this" {
 resource "aws_eks_addon" "metrics_server" {
   cluster_name = local.cluster_name
   addon_name   = "metrics-server"
+
+  # LB Controller는 Service 변경을 검사하는 웹훅(mservice.elbv2.k8s.aws)을 등록한다.
+  # 동시에 만들면 웹훅 파드가 뜨기 전에 metrics-server의 Service 생성이 거부되어 CREATE_FAILED가 된다(2026-11-01).
+  # helm_release는 기본값(wait = true)으로 파드가 준비될 때까지 기다리므로 그 뒤에 만든다
+  depends_on = [helm_release.lb_controller]
 }

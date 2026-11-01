@@ -61,7 +61,31 @@
   [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s.data.'admin-password'))
   ```
 - Prometheus·Alertmanager·Tempo·Loki는 외부에 노출하지 않는다. Grafana 데이터소스로 조회하고, API가 필요하면 `kubectl port-forward -n monitoring svc/kps-prometheus 9090`(Tempo `svc/tempo 3200`, Loki `svc/loki 3100`)
+  - 스크립트에서 쓸 때는 port-forward를 백그라운드 프로세스로 띄우고 `Invoke-RestMethod <주소>/api/v1/query -Body @{ query = '<PromQL>' }`로 조회한다. `-Body`가 쿼리를 인코딩하므로 PromQL의 큰따옴표가 깨지지 않는다(6장의 따옴표 문제를 피함)
+  - Prometheus·Tempo 파드가 다시 만들어지면 port-forward 연결이 끊긴다. 재배포 후에는 다시 띄운다
+  - `kubectl get --raw /api/v1/namespaces/monitoring/services/kps-prometheus:9090/proxy/...`(API 서버 프록시)는 응답 없이 멈춘 적이 있다(2026-10-31). port-forward를 쓴다
 - Grafana 데이터소스 uid: `webstore-metrics`(Prometheus), `webstore-traces`(Tempo), `webstore-logs`(Loki). 데모 대시보드가 이 uid를 참조하므로 바꾸지 않는다.
+
+### 알림 채널 (Slack)
+Alertmanager가 `severity`별로 Slack 채널에 보낸다: `critical` → `#alerts-critical`, `warning` → `#alerts-warning`. `Watchdog`·`InfoInhibitor`와 severity가 없거나 `info`인 알림은 보내지 않는다(라우팅: `helm/values/kube-prometheus-stack.yaml`의 `alertmanager.config`).
+
+- 웹훅 URL은 `helm/values/slack-webhooks.local.yaml`(커밋 안 함)에 둔다. **이 파일이 없으면 `deploy-observability.ps1`이 멈춘다.** 클러스터를 다시 만들어도 파일은 그대로 쓴다.
+  ```yaml
+  critical: https://hooks.slack.com/services/...
+  warning: https://hooks.slack.com/services/...
+  ```
+- 웹훅 만들기: https://api.slack.com/apps → Create New App(From scratch, 워크스페이스 선택) → Incoming Webhooks 켜기 → 채널별로 Add New Webhook. 워크스페이스는 앱을 만들 때 정해지고 바꿀 수 없다.
+- 스크립트가 파일을 읽어 Secret `alertmanager-slack`을 매번 갱신하고(값은 출력하지 않음), Alertmanager가 이 Secret을 `/etc/alertmanager/secrets/alertmanager-slack/`에 마운트해 `api_url_file`로 읽는다. URL은 values나 Helm 릴리스 기록에 남지 않는다.
+- 설정을 바꾸기 전에 렌더링한 설정을 실행 중인 파드의 `amtool check-config`로 검사할 수 있다. 루트 파일 시스템이 읽기 전용이라 `/alertmanager/`(데이터 디렉터리)에 임시로 쓴다.
+- 지금 들어온 알림: `kubectl exec -n monitoring alertmanager-kps-alertmanager-0 -c alertmanager -- amtool alert query --alertmanager.url=http://localhost:9093`
+- **트래픽을 일부러 멈출 때**(load-generator를 0으로 줄여 트레이스를 관찰하는 등): 기준선 알림 `ShopTrafficLow`가 5분 뒤 critical로 울린다. 줄이기 전에 silence를 건다
+  ```powershell
+  kubectl exec -n monitoring alertmanager-kps-alertmanager-0 -c alertmanager -- amtool --alertmanager.url=http://localhost:9093 silence add alertname=ShopTrafficLow --duration=2h --comment=load-generator-0
+  ```
+  다시 늘린 뒤 `amtool silence query`로 ID를 확인해 `amtool silence expire <ID>`로 푼다
+- **클러스터를 새로 켠 직후** `ShopTrafficLow`(critical)가 울릴 수 있다. 기준선 규칙은 관측 스택 배포 때 먼저 적용되고 쇼핑몰 요청은 데모 배포 뒤에 들어오기 때문이다(2026-11-01, 5분 구간이 차기 전 pending). 데모 배포 후 5~10분 안에 풀리면 무시한다
+- **데모 차트를 재배포한 직후** 주문 SLO warning이 울릴 수 있다. Collector가 재시작하는 동안 quote 요청이 5초 시간 초과로 실패해 주문이 실패했다(2026-10-31, [Phase 4 상세](phases/phase-4-slo-alerts.md)의 ② 진행 중 발견)
+- 기준선 알림 규칙은 `observability/alerts/`(PrometheusRule). 고치기 전에 `kubectl apply --dry-run=server -f observability/alerts`로 검증한다. promtool로 검사하려면 Prometheus 파드에 `sh`가 없으므로 `spec:` 아래 내용을 표준 입력으로 넘긴다(`kubectl exec -i ... -c prometheus -- promtool check rules`)
 
 ### 데모 배포
 ```powershell
@@ -165,6 +189,18 @@ aws ec2 describe-security-groups --profile terraform-admin --filters Name=vpc-id
 terraform -chdir=terraform/01-cluster force-unlock <LOCK_ID>
 ```
 
+### destroy 도중 네트워크가 끊겨 state를 저장하지 못했다 (`errored.tfstate`)
+증상: `01-cluster destroy`가 `dial tcp: lookup ...amazonaws.com: no such host`로 실패하고, `Failed to persist state to backend`, `Error releasing the state lock`이 이어진다. 작업 디렉터리(`terraform/01-cluster/`)에 `errored.tfstate`가 생긴다 (2026-10-31, 로컬 DNS가 약 20분 끊김).
+
+원인: 삭제가 진행되는 중에 로컬 네트워크(DNS)가 끊겼다. AWS 쪽 삭제는 일부 끝났는데(이때는 노드그룹·EC2 삭제됨, 클러스터·VPC 남음) S3 state에는 반영되지 않았고 잠금도 남았다. **클러스터가 남아 있으면 과금이 계속되므로 바로 복구한다.**
+
+해결:
+1. 네트워크 복구 확인(`Resolve-DnsName ec2.ap-northeast-2.amazonaws.com`), 실행 중인 terraform 프로세스가 없는지 확인
+2. 남은 리소스 확인: `aws eks describe-cluster`, `aws eks list-nodegroups`, `aws ec2 describe-instances`(태그 `eks:cluster-name`), VPC, 로드밸런서
+3. `terraform -chdir=terraform/01-cluster state push errored.tfstate` → 잠금 때문에 실패하면 오류의 Lock ID로 `force-unlock` 후 다시 push. `errored.tfstate`에는 실제로 지워진 리소스가 반영되어 있어 S3의 예전 state보다 정확하다
+4. `plan -destroy`로 남은 리소스를 확인하고 `down.ps1`(또는 그 plan 파일로 apply)을 다시 실행
+5. 끝나면 `errored.tfstate`를 지운다(`*.tfstate` 패턴으로 커밋되지 않지만 다음 작업에 혼동을 준다)
+
 ### 노드그룹이 30분 가까이 CREATING이다가 CREATE_FAILED가 된다 (인스턴스 0대)
 증상: apply가 `aws_eks_node_group ... Still creating...`에서 오래 멈추고, EC2 인스턴스가 하나도 생기지 않는다. 약 30분 뒤 `AsgInstanceLaunchFailures`로 실패한다.
 
@@ -205,6 +241,20 @@ helm uninstall otel-demo -n otel-demo --wait
 원인: `$approve = if (...) { @('-auto-approve') } else { @() }`처럼 `if` 식의 결과를 그대로 받으면, 요소 1개짜리 배열이 **문자열 하나로 풀린다.** 문자열을 `@approve`로 펼치면 글자 단위로 쪼개져 `- a u t o - a p p r o v e`가 전달된다.
 
 해결: `$approve = @(if ($AutoApprove) { '-auto-approve' })`로 항상 배열을 유지 (2026-10-30, up.ps1·down.ps1 모두 수정). 같은 실행에서 `kubectl -o jsonpath`의 큰따옴표가 깨지는 문제도 있어, LoadBalancer Service 조회를 `-o json` + PowerShell 필터로 바꿨다.
+
+### terraform plan `-out=up.tfplan`이 "Too many command line arguments"로 실패한다
+- 원인: Windows PowerShell 5.1이 따옴표 없는 `-out=up.tfplan`을 점에서 나눠 `-out=up`과 `.tfplan` 두 인자로 넘긴다 (2026-10-31, Phase 4에서 plan 파일을 만들다 발견).
+- 해결: `'-out=up.tfplan'`처럼 따옴표로 감싼다. 점이 들어간 `-옵션=값` 인자는 모두 같다.
+
+### flagd 플래그를 바꿨는데 반영되지 않는다
+- flagd UI는 `/feature` 경로 기준으로 빌드되어 있다. port-forward로 루트(`http://localhost:<포트>/`)에 열면 화면은 보이지만 스크립트가 로드되지 않아 값을 바꿔도 저장되지 않는다. **ALB의 `/feature/`로 연다**
+- flagd는 ConfigMap `flagd-config`를 직접 읽지 않는다. init 컨테이너가 시작할 때 emptyDir로 복사한 파일(`/etc/flagd/demo.flagd.json`)을 읽고 flagd UI가 그 파일을 고친다. ConfigMap을 고쳐도 파드를 다시 만들기 전에는 반영되지 않는다
+- 반영 확인: `kubectl exec -n otel-demo <flagd 파드> -c flagd-ui -- cat /app/data/demo.flagd.json`에서 해당 플래그의 `defaultVariant` (2026-11-01)
+
+### 02-addons에서 metrics-server 애드온이 CREATE_FAILED가 된다 (웹훅 경쟁)
+- 증상: `waiting for EKS Add-On (otel-demo:metrics-server) create: unexpected state 'CREATE_FAILED'`, `failed calling webhook "mservice.elbv2.k8s.aws" ... no endpoints available for service "aws-load-balancer-webhook-service"` (2026-11-01)
+- 원인: LB Controller가 Service 변경 검사 웹훅을 등록했는데 웹훅 파드가 아직 준비되지 않은 사이에 metrics-server가 Service를 만들었다. 두 리소스에 의존성이 없어 동시에 만들어졌고, 이전에는 순서가 맞아 우연히 성공했다
+- 해결: `terraform/02-addons/main.tf`의 `aws_eks_addon.metrics_server`에 `depends_on = [helm_release.lb_controller]` 추가. 실패한 애드온은 state에 tainted로 남아 다음 plan에서 교체(1 add, 1 destroy)된다
 
 ### up.ps1에서 02-addons가 실패한다
 - `Error: Kubernetes cluster unreachable`: kubeconfig나 IP 허용 목록 문제다. 위의 IP 변경 항목을 확인한다.

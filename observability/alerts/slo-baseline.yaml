@@ -1,0 +1,196 @@
+# Phase 4 기준선 알림 (docs/phases/phase-4-slo-alerts.md "기준선 알림"과 같은 내용).
+# Phase 5에서는 이 파일을 고치지 않은 상태로 장애를 주입하고, 보강한 내용은 Phase 5 문서에 비교해 남긴다.
+# 적용: scripts/deploy-observability.ps1 (kps Prometheus가 릴리스 라벨 없이도 이 규칙을 읽는다: ruleSelectorNilUsesHelmValues: false)
+#
+# SLI는 Collector span metrics(traces_span_metrics_*)로 계산한다. 1분마다 들어오므로 가장 짧은 구간은 5m.
+# burn rate 기준은 Google SRE Workbook 다중 구간 방식(30일 기준): critical 14.4(1h·5m), warning 6(6h·30m).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: slo-baseline
+  namespace: monitoring
+spec:
+  groups:
+    # 구간별 에러 비율(1 - SLI)을 미리 계산한다. 알림과 SLO 대시보드가 같은 값을 쓴다.
+    # 쇼핑몰 요청: frontend-proxy가 쇼핑몰 백엔드(frontend, image-provider)로 보낸 요청.
+    # flagd 스트리밍(flagservice)과 관측 도구 경로는 사용자가 기다리는 요청이 아니라 넣지 않는다.
+    - name: slo-sli
+      interval: 1m
+      rules:
+        # 쇼핑몰 가용성: 5xx 비율. 5xx가 한 번도 없으면 분자 시리즈가 없어 or vector(0)으로 0을 만든다.
+        # 분모(요청)가 없으면 결과가 비어 알림이 울리지 않는다. 그 경우는 ShopTrafficLow가 잡는다.
+        - record: slo:sli_error:ratio_rate5m
+          labels: &shopAvailability
+            slo: shop-availability
+          expr: |-
+            (sum(rate(traces_span_metrics_calls_total{service_name="frontend-proxy", span_kind="SPAN_KIND_SERVER", upstream_cluster=~"frontend|image-provider", http_status_code=~"5.."}[5m])) or vector(0))
+            /
+            sum(rate(traces_span_metrics_calls_total{service_name="frontend-proxy", span_kind="SPAN_KIND_SERVER", upstream_cluster=~"frontend|image-provider"}[5m]))
+        - record: slo:sli_error:ratio_rate30m
+          labels: *shopAvailability
+          expr: |-
+            (sum(rate(traces_span_metrics_calls_total{service_name="frontend-proxy", span_kind="SPAN_KIND_SERVER", upstream_cluster=~"frontend|image-provider", http_status_code=~"5.."}[30m])) or vector(0))
+            /
+            sum(rate(traces_span_metrics_calls_total{service_name="frontend-proxy", span_kind="SPAN_KIND_SERVER", upstream_cluster=~"frontend|image-provider"}[30m]))
+        - record: slo:sli_error:ratio_rate1h
+          labels: *shopAvailability
+          expr: |-
+            (sum(rate(traces_span_metrics_calls_total{service_name="frontend-proxy", span_kind="SPAN_KIND_SERVER", upstream_cluster=~"frontend|image-provider", http_status_code=~"5.."}[1h])) or vector(0))
+            /
+            sum(rate(traces_span_metrics_calls_total{service_name="frontend-proxy", span_kind="SPAN_KIND_SERVER", upstream_cluster=~"frontend|image-provider"}[1h]))
+        - record: slo:sli_error:ratio_rate6h
+          labels: *shopAvailability
+          expr: |-
+            (sum(rate(traces_span_metrics_calls_total{service_name="frontend-proxy", span_kind="SPAN_KIND_SERVER", upstream_cluster=~"frontend|image-provider", http_status_code=~"5.."}[6h])) or vector(0))
+            /
+            sum(rate(traces_span_metrics_calls_total{service_name="frontend-proxy", span_kind="SPAN_KIND_SERVER", upstream_cluster=~"frontend|image-provider"}[6h]))
+
+        # 주문 성공률: checkout PlaceOrder 서버 스팬의 에러 상태 비율
+        - record: slo:sli_error:ratio_rate5m
+          labels: &checkout
+            slo: checkout
+          expr: |-
+            (sum(rate(traces_span_metrics_calls_total{service_name="checkout", span_name="oteldemo.CheckoutService/PlaceOrder", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[5m])) or vector(0))
+            /
+            sum(rate(traces_span_metrics_calls_total{service_name="checkout", span_name="oteldemo.CheckoutService/PlaceOrder", span_kind="SPAN_KIND_SERVER"}[5m]))
+        - record: slo:sli_error:ratio_rate30m
+          labels: *checkout
+          expr: |-
+            (sum(rate(traces_span_metrics_calls_total{service_name="checkout", span_name="oteldemo.CheckoutService/PlaceOrder", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[30m])) or vector(0))
+            /
+            sum(rate(traces_span_metrics_calls_total{service_name="checkout", span_name="oteldemo.CheckoutService/PlaceOrder", span_kind="SPAN_KIND_SERVER"}[30m]))
+        - record: slo:sli_error:ratio_rate1h
+          labels: *checkout
+          expr: |-
+            (sum(rate(traces_span_metrics_calls_total{service_name="checkout", span_name="oteldemo.CheckoutService/PlaceOrder", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[1h])) or vector(0))
+            /
+            sum(rate(traces_span_metrics_calls_total{service_name="checkout", span_name="oteldemo.CheckoutService/PlaceOrder", span_kind="SPAN_KIND_SERVER"}[1h]))
+        - record: slo:sli_error:ratio_rate6h
+          labels: *checkout
+          expr: |-
+            (sum(rate(traces_span_metrics_calls_total{service_name="checkout", span_name="oteldemo.CheckoutService/PlaceOrder", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[6h])) or vector(0))
+            /
+            sum(rate(traces_span_metrics_calls_total{service_name="checkout", span_name="oteldemo.CheckoutService/PlaceOrder", span_kind="SPAN_KIND_SERVER"}[6h]))
+
+        # 쇼핑몰 지연: 400ms 버킷을 넘긴 요청 비율. 버킷 경계는 span metrics 기본값(... 200 400 800 ...)
+        - record: slo:sli_error:ratio_rate5m
+          labels: &shopLatency
+            slo: shop-latency
+          expr: |-
+            1 - (
+              sum(rate(traces_span_metrics_duration_milliseconds_bucket{service_name="frontend-proxy", span_kind="SPAN_KIND_SERVER", upstream_cluster=~"frontend|image-provider", le="400"}[5m]))
+              /
+              sum(rate(traces_span_metrics_duration_milliseconds_count{service_name="frontend-proxy", span_kind="SPAN_KIND_SERVER", upstream_cluster=~"frontend|image-provider"}[5m]))
+            )
+        - record: slo:sli_error:ratio_rate30m
+          labels: *shopLatency
+          expr: |-
+            1 - (
+              sum(rate(traces_span_metrics_duration_milliseconds_bucket{service_name="frontend-proxy", span_kind="SPAN_KIND_SERVER", upstream_cluster=~"frontend|image-provider", le="400"}[30m]))
+              /
+              sum(rate(traces_span_metrics_duration_milliseconds_count{service_name="frontend-proxy", span_kind="SPAN_KIND_SERVER", upstream_cluster=~"frontend|image-provider"}[30m]))
+            )
+        - record: slo:sli_error:ratio_rate1h
+          labels: *shopLatency
+          expr: |-
+            1 - (
+              sum(rate(traces_span_metrics_duration_milliseconds_bucket{service_name="frontend-proxy", span_kind="SPAN_KIND_SERVER", upstream_cluster=~"frontend|image-provider", le="400"}[1h]))
+              /
+              sum(rate(traces_span_metrics_duration_milliseconds_count{service_name="frontend-proxy", span_kind="SPAN_KIND_SERVER", upstream_cluster=~"frontend|image-provider"}[1h]))
+            )
+        - record: slo:sli_error:ratio_rate6h
+          labels: *shopLatency
+          expr: |-
+            1 - (
+              sum(rate(traces_span_metrics_duration_milliseconds_bucket{service_name="frontend-proxy", span_kind="SPAN_KIND_SERVER", upstream_cluster=~"frontend|image-provider", le="400"}[6h]))
+              /
+              sum(rate(traces_span_metrics_duration_milliseconds_count{service_name="frontend-proxy", span_kind="SPAN_KIND_SERVER", upstream_cluster=~"frontend|image-provider"}[6h]))
+            )
+
+        # SLO 목표의 에러 버짓(1 - 목표). 알림 기준과 SLO 대시보드가 같은 값을 쓴다
+        - record: slo:error_budget:ratio
+          labels: *shopAvailability
+          expr: vector(0.005)
+        - record: slo:error_budget:ratio
+          labels: *checkout
+          expr: vector(0.01)
+        - record: slo:error_budget:ratio
+          labels: *shopLatency
+          expr: vector(0.01)
+
+    # burn rate 알림. SLO마다 alertname 하나에 severity만 다르게 둔다.
+    # Alertmanager inhibit 규칙(같은 alertname의 critical이 warning을 억제)으로 critical이 울리면 warning은 오지 않는다.
+    # for 2m: 지표가 1분마다 들어오므로 평가 한두 번의 흔들림을 거른다
+    - name: slo-burn-rate
+      interval: 1m
+      rules:
+        - alert: SLOErrorBudgetBurn
+          expr: |-
+            (
+              slo:sli_error:ratio_rate1h > on(slo) (14.4 * slo:error_budget:ratio)
+            and
+              slo:sli_error:ratio_rate5m > on(slo) (14.4 * slo:error_budget:ratio)
+            )
+          for: 2m
+          labels:
+            severity: critical
+            alert_type: slo
+          annotations: &burnAnnotations
+            summary: 'SLO {{ $labels.slo }} 에러 버짓 소진 중'
+            description: |-
+              긴 구간(critical 1시간, warning 6시간) 에러 비율 {{ $value | humanizePercentage }}.
+              critical: 1시간·5분 burn rate > 14.4 (1시간에 30일 버짓 2% 소진), warning: 6시간·30분 burn rate > 6.
+              SLI 정의: docs/phases/phase-4-slo-alerts.md "기준선 알림"
+        - alert: SLOErrorBudgetBurn
+          expr: |-
+            (
+              slo:sli_error:ratio_rate6h > on(slo) (6 * slo:error_budget:ratio)
+            and
+              slo:sli_error:ratio_rate30m > on(slo) (6 * slo:error_budget:ratio)
+            )
+          for: 2m
+          labels:
+            severity: warning
+            alert_type: slo
+          annotations: *burnAnnotations
+
+    # 측정 유효성: SLO 알림이 판단할 수 없거나 일부 데이터로만 판단하는 상태
+    - name: slo-measurement
+      interval: 1m
+      rules:
+        # 요청이 끊기거나 span metrics가 사라지면 SLI 분모가 없어 burn rate 알림이 울리지 않는다.
+        # 시리즈가 없으면 rate()가 빈 결과라 or vector(0)으로 0을 만든다.
+        # 기준 5건/초: 평소 약 16건/초(load-generator 1개, 2026-10-31 실측)의 약 30%.
+        # load-generator를 0으로 줄이면 울리므로 미리 silence를 건다(docs/operations.md)
+        - alert: ShopTrafficLow
+          expr: |-
+            (sum(rate(traces_span_metrics_calls_total{service_name="frontend-proxy", span_kind="SPAN_KIND_SERVER", upstream_cluster=~"frontend|image-provider"}[5m])) or vector(0)) < 5
+          for: 5m
+          labels:
+            severity: critical
+            alert_type: measurement
+          annotations:
+            summary: '쇼핑몰 요청률 급감 또는 SLI 데이터 없음'
+            description: |-
+              frontend-proxy → 쇼핑몰 요청 {{ $value | printf "%.1f" }}건/초 (평소 약 16건/초).
+              요청이 실제로 줄었거나, Collector·Prometheus 경로가 끊겨 span metrics가 들어오지 않는다. 이 동안 SLO 알림은 판단하지 못한다.
+        # Collector가 스팬을 거부(memory_limiter 등)하거나 내보내지 못하면 SLI가 남은 일부로만 계산된다.
+        # 지표 이름을 정규식으로 골라 한 번에 rate()하면 이름이 지워져 "same labelset" 오류가 나므로 지표마다 따로 계산해 or로 묶는다.
+        # send_failed·enqueue_failed는 실패가 한 번도 없으면 시리즈가 없다(2026-10-31 확인). 없으면 그 항목은 빈 결과다
+        - alert: CollectorTelemetryDropping
+          expr: |-
+            label_replace(sum(rate(otelcol_receiver_refused_spans_total{receiver="otlp"}[5m])) > 0, "drop", "spans_refused", "", "")
+            or label_replace(sum(rate(otelcol_receiver_failed_spans_total{receiver="otlp"}[5m])) > 0, "drop", "spans_failed", "", "")
+            or label_replace(sum(rate(otelcol_exporter_send_failed_metric_points_total{exporter="otlp_http/kps"}[5m])) > 0, "drop", "metrics_send_failed", "", "")
+            or label_replace(sum(rate(otelcol_exporter_enqueue_failed_metric_points_total{exporter="otlp_http/kps"}[5m])) > 0, "drop", "metrics_enqueue_failed", "", "")
+            or label_replace(sum(rate(otelcol_exporter_send_failed_spans_total{exporter="otlp_grpc/tempo"}[5m])) > 0, "drop", "spans_send_failed", "", "")
+            or label_replace(sum(rate(otelcol_exporter_enqueue_failed_spans_total{exporter="otlp_grpc/tempo"}[5m])) > 0, "drop", "spans_enqueue_failed", "", "")
+          for: 10m
+          labels:
+            severity: warning
+            alert_type: measurement
+          annotations:
+            summary: 'Collector가 텔레메트리를 버리고 있음 ({{ $labels.drop }})'
+            description: |-
+              {{ $labels.drop }} {{ $value | printf "%.1f" }}건/초가 10분 넘게 이어진다.
+              SLI(span metrics)가 남은 일부로만 계산되어 실제보다 좋게 보일 수 있다. Collector 로그와 memory_limiter·큐 사용률을 확인한다.

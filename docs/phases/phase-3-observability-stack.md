@@ -209,7 +209,7 @@ kube-prometheus-stack을 고른 이유: 내장 Prometheus도 Alertmanager·kube-
 - `opensearch.enabled: false`, Collector logs exporter를 `otlp_http/loki`만 남김, 비교용 데이터소스·OpenSearch 플러그인 삭제
 - 확인: OpenSearch 리소스(PVC 포함) 0개, Collector 오류 0건, Loki 최근 1분 로그 2106건, APM 로그 패널 브라우저 확인
 
-**monitoring 노드 자원 (내장 도구 모두 제거 후)**
+**monitoring 노드 자원 (내장 도구 모두 제거 후)** — requests·limits는 `kubectl describe node <monitoring 노드>`의 `Allocated resources`(파드 설정값의 합, 할당 가능 메모리 7276368Ki 대비 비율). 측정 방법은 Phase 4에서 덧붙였고, 같은 values로 새로 만든 클러스터에서 같은 값(2242Mi·6736Mi)이 나온 것을 확인했다(2026-10-31)
 | 항목 | ④ 완료 시 | ⑥ 완료 후 |
 |---|---|---|
 | CPU requests | 1400m (72%) | **500m (25%)** |
@@ -218,7 +218,8 @@ kube-prometheus-stack을 고른 이유: 내장 Prometheus도 Alertmanager·kube-
 | 실사용 메모리 | — | Prometheus 622Mi, Tempo 425Mi, Grafana 279Mi(본체), Loki 96Mi |
 
 - OpenSearch는 실사용 CPU 20m인데 requests 1000m(차트 기본값)로 노드의 절반을 예약하고 있었다. 메모리는 885Mi(Loki 96Mi).
-- 메모리 limits 합 94%: 모든 컴포넌트가 동시에 제한까지 차오르면 노드 메모리가 모자란다. 지금 실사용은 훨씬 낮아 Phase 4에서 다시 본다.
+- 메모리 limits 합 94%: ~~모든 컴포넌트가 동시에 제한까지 차오르면 노드 메모리가 모자란다.~~ 지금 실사용은 훨씬 낮아 Phase 4에서 다시 본다.
+  - **정정 (Phase 4 ⓪)**: limits 합이 100% 미만이면 모두 limits까지 써도 할당 가능량 안에 든다. 실제로 볼 것은 requests보다 많이 쓰는 컴포넌트였다([Phase 4 상세의 ⓪](phase-4-slo-alerts.md))
 
 ### ⑦ 데이터소스 연결 ✅
 

@@ -1605,7 +1605,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (host_name) (\n  rate(system_cpu_time_seconds_total{service_name=\"\", state!=\"idle\"}[$__rate_interval])\n)\n* on(host_name) \ngroup by (host_name) (\n  target_info{service_name=\"${service_name}\", service_instance_id!=\"\"}\n)",
+          "expr": "sum by (host_name) (\n  (\n    sum by (instance) (rate(node_cpu_seconds_total{job=\"node-exporter\", mode!=\"idle\"}[$__rate_interval]))\n    / on(instance) count by (instance) (node_cpu_seconds_total{job=\"node-exporter\", mode=\"idle\"})\n  )\n  * on(instance) group_left(host_name)\n  label_replace(node_uname_info{job=\"node-exporter\"}, \"host_name\", \"$1\", \"nodename\", \"(.*)\")\n)\n* on(host_name) \ngroup by (host_name) (\n  target_info{service_name=\"${service_name}\", service_instance_id!=\"\"}\n)",
           "hide": false,
           "legendFormat": "__auto",
           "range": true,
@@ -1617,7 +1617,7 @@
             "uid": "webstore-metrics"
           },
           "editorMode": "code",
-          "expr": "  (\n    (\n      sum by (host_name) (\n        system_memory_usage_bytes{service_name=\"\", state=\"used\"}\n      )\n      /\n      sum by (host_name) (\n        system_memory_usage_bytes{service_name=\"\"}\n      )\n    )\n    * on(host_name) (\n      group by (host_name) (\n        target_info{service_name=\"${service_name}\"}\n      )\n    )\n  )\n",
+          "expr": "  (\n    sum by (host_name) (\n      (\n        1 - node_memory_MemAvailable_bytes{job=\"node-exporter\"} / node_memory_MemTotal_bytes{job=\"node-exporter\"}\n      )\n      * on(instance) group_left(host_name)\n      label_replace(node_uname_info{job=\"node-exporter\"}, \"host_name\", \"$1\", \"nodename\", \"(.*)\")\n    )\n    * on(host_name) (\n      group by (host_name) (\n        target_info{service_name=\"${service_name}\"}\n      )\n    )\n  )\n",
           "hide": false,
           "instant": false,
           "legendFormat": "__auto",
@@ -1747,7 +1747,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (k8s_pod_name) (\n    rate(k8s_pod_cpu_time_seconds_total{}[$__rate_interval])\n)\n* on(k8s_pod_name) \ngroup by (k8s_pod_name) (\n  target_info{service_name=\"${service_name}\", service_instance_id!=\"\"}\n)\n",
+          "expr": "sum by (k8s_pod_name) (\n  label_replace(\n    rate(container_cpu_usage_seconds_total{job=\"kubelet\", metrics_path=\"/metrics/cadvisor\", container!=\"\", image!=\"\"}[$__rate_interval]),\n    \"k8s_pod_name\", \"$1\", \"pod\", \"(.*)\"\n  )\n)\n* on(k8s_pod_name) \ngroup by (k8s_pod_name) (\n  target_info{service_name=\"${service_name}\", service_instance_id!=\"\"}\n)\n",
           "hide": false,
           "legendFormat": "__auto",
           "range": true,
@@ -1759,7 +1759,7 @@
             "uid": "webstore-metrics"
           },
           "editorMode": "code",
-          "expr": "\nsum by (k8s_pod_name) (\n  k8s_pod_memory_working_set_bytes{}\n)\n* on(k8s_pod_name)\ngroup by (k8s_pod_name) (\n  target_info{service_name=\"${service_name}\", service_instance_id!=\"\"}\n)\n",
+          "expr": "\nsum by (k8s_pod_name) (\n  label_replace(\n    container_memory_working_set_bytes{job=\"kubelet\", metrics_path=\"/metrics/cadvisor\", container!=\"\", image!=\"\"},\n    \"k8s_pod_name\", \"$1\", \"pod\", \"(.*)\"\n  )\n)\n* on(k8s_pod_name)\ngroup by (k8s_pod_name) (\n  target_info{service_name=\"${service_name}\", service_instance_id!=\"\"}\n)\n",
           "hide": false,
           "instant": false,
           "legendFormat": "__auto",
